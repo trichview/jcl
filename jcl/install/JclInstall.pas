@@ -19,12 +19,16 @@
 {   Robert Rossmair - crossplatform & BCB support, refactoring                                     }
 {   Florent Ouchet (outchy) - New installer core, resource refactorings                            }
 {   Jean-Fabien Connault (cycocrew)                                                                }
+{   Sergey Tkachenko (trichview)                                                                   }
 {                                                                                                  }
 {**************************************************************************************************}
+{ Changes by trichview:                                                                            }
+{ - new empty string parameters in calls of CompilePackage                                         }
+{**************************************************************************************************}
 {                                                                                                  }
-{ Last modified: $Date::                                                                         $ }
-{ Revision:      $Rev::                                                                          $ }
-{ Author:        $Author::                                                                       $ }
+{ Last modified: 14.04.2015:                                                                     $ }
+{ Revision:      unofficial                                                                      $ }
+{ Author:        trichview                                                                       $ }
 {                                                                                                  }
 {**************************************************************************************************}
 
@@ -2843,7 +2847,7 @@ begin
   begin
     if Target.RadToolKind = brBorlandDevStudio then
       (Target as TJclBDSInstallation).CleanPackageCache(BinaryFileName(GetBplPath, PackageFileName));
-    Result := Target.CompilePackage(PackageFileName, GetBplPath, GetDcpPath);
+    Result := Target.CompilePackage(PackageFileName, GetBplPath, GetDcpPath, '', '');
   end
   else
   if IsBCBPackage(PackageFileName) and TargetSupportsCBuilder then
@@ -2856,8 +2860,8 @@ begin
     // Note: it is put out to .bpl path to make life easier for JVCL
     DpkPackageFileName := ChangeFileExt(PackageFileName, SourceExtensionDelphiPackage);
     Result := ((not FileExists(DpkPackageFileName))
-               or Target.CompilePackage(DpkPackageFileName, GetBplPath, GetDcpPath))
-              and Target.CompilePackage(PackageFileName, GetBplPath, GetDcpPath);
+               or Target.CompilePackage(DpkPackageFileName, GetBplPath, GetDcpPath, '', ''))
+              and Target.CompilePackage(PackageFileName, GetBplPath, GetDcpPath, '', '');
   end
   else
   begin
@@ -3858,6 +3862,7 @@ begin
   RegHelpExecuteCommands(False);
   {$ENDIF MSWINDOWS}
 end;
+
 
 initialization
   JediInstall.InstallCore.AddProduct(TJclDistribution.Create);
