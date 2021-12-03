@@ -34,16 +34,21 @@
 {   Rudy Velthuis                                                                                  }
 {   Uwe Schuster (uschuster)                                                                       }
 {   Wayne Sherman                                                                                  }
+{   Sergey Tkachenko (trichview)                                                                   }
 {                                                                                                  }
 {**************************************************************************************************}
 {                                                                                                  }
 { Description: Various pointer and class related routines.                                         }
 {                                                                                                  }
 {**************************************************************************************************}
+{ Changes by trichview:                                                                            }
+{ - IJclCommandLineTool.SetOutput is added                                                         }
 {                                                                                                  }
-{ Last modified: $Date::                                                                         $ }
-{ Revision:      $Rev::                                                                          $ }
-{ Author:        $Author::                                                                       $ }
+{**************************************************************************************************}
+{                                                                                                  }
+{ Last modified: 14.04.2015                                                                      $ }
+{ Revision:      unofficial                                                                      $ }
+{ Author:        trichview                                                                       $ }
 {                                                                                                  }
 {**************************************************************************************************}
 
@@ -530,6 +535,7 @@ type
     function GetExeName: string;
     function GetOptions: TStrings;
     function GetOutput: string;
+    procedure SetOutput(const Value: string);
     function GetOutputCallback: TTextHandler;
     procedure AddPathOption(const Option, Path: string);
     function Execute(const CommandLine: string): Boolean;
@@ -537,7 +543,7 @@ type
     property ExeName: string read GetExeName;
     property Options: TStrings read GetOptions;
     property OutputCallback: TTextHandler read GetOutputCallback write SetOutputCallback;
-    property Output: string read GetOutput;
+    property Output: string read GetOutput write SetOutput;
   end;
 
   EJclCommandLineToolError = class(EJclError);
@@ -555,6 +561,7 @@ type
     function GetExeName: string;
     function GetOptions: TStrings;
     function GetOutput: string;
+    procedure SetOutput(const Value: string);
     function GetOutputCallback: TTextHandler;
     procedure AddPathOption(const Option, Path: string);
     function Execute(const CommandLine: string): Boolean;
@@ -2303,7 +2310,7 @@ begin
   FSignChars[False] := '-';
   FSignChars[True] := '+';
   FPaddingChar := ' ';
-  FMultiplier := '×';
+  FMultiplier := 'Ð§';
   FFractionalPartSeparator := JclFormatSettings.DecimalSeparator;
   FDigitBlockSeparator := JclFormatSettings.ThousandSeparator;
 end;
@@ -2741,9 +2748,15 @@ end;
 procedure InternalExecuteProcessBuffer(var PipeInfo: TPipeInfo; PipeBytesRead: Cardinal);
 var
   CR, LF: Integer;
+  //S: String;
 begin
   PipeInfo.Buffer[PipeBytesRead] := #0;
-  PipeInfo.Line := PipeInfo.Line + string(PipeInfo.Buffer);
+  //SetLength(S, Length(PipeInfo.Buffer)*2);
+  //OemToChar(@(PipeInfo.Buffer[0]), Pointer(S));
+  //P := Pos(#0, S);
+  //if P>0 then
+  //  SetLength(S, P-1);
+  PipeInfo.Line := PipeInfo.Line + String(PipeInfo.Buffer);
   if Assigned(PipeInfo.TextHandler) then
   repeat
     CR := Pos(NativeCarriageReturn, PipeInfo.Line);
@@ -3031,7 +3044,7 @@ begin
         end;
         if {$IFDEF FPC}Boolean({$ENDIF}AbortPtr^{$IFDEF FPC}){$ENDIF} then
           TerminateProcess(ProcessEvent.Handle, Cardinal(ABORT_EXIT_CODE));
-        if (ProcessEvent.WaitForever = wrSignaled) and not GetExitCodeProcess(ProcessEvent.Handle, Result) then
+        if (ProcessEvent.WaitForever = TJclWaitResult.wrSignaled) and not GetExitCodeProcess(ProcessEvent.Handle, Result) then
           Result := $FFFFFFFF;
         CloseHandle(ProcessInfo.hThread);
         ProcessInfo.hThread := 0;
@@ -3266,6 +3279,11 @@ end;
 function TJclCommandLineTool.GetOutput: string;
 begin
   Result := FOutput;
+end;
+
+procedure TJclCommandLineTool.SetOutput(const Value: string);
+begin
+  FOutput := Value;
 end;
 
 function TJclCommandLineTool.GetOutputCallback: TTextHandler;
