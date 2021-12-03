@@ -21,12 +21,24 @@
 {   Robert Marquardt (marquardt)                                                                   }
 {   Robert Rossmair (rrossmair) - crossplatform & BCB support                                      }
 {   Uwe Schuster (uschuster)                                                                       }
+{   Sergey Tkachenko (trichview)                                                                   }
+{                                                                                                  }
+{**************************************************************************************************}
+{ Changes by trichview:                                                                            }
+{ - TJclBorlandCommandLineTool.SetOutput is added;                                                 }
+{ - cbproj support                                                                                 }
+{ - BinaryFileName works even if the source package is not found (it assumes empty prefixes and    }
+{   postfixes)                                                                                     }
+{ - TJclDCC32.AddProjectOptions now adds DCPPath even if no package options file is found          }
+{ - removed convestion to OEM in TJclBorlandCommandLineTool.InternalExecute (otherwise,            }
+{    non-English paths were damaged)                                                               }
+{ - ability to specify library paths in parameters                                                 }
 {                                                                                                  }
 {**************************************************************************************************}
 {                                                                                                  }
-{ Last modified: $Date::                                                                         $ }
-{ Revision:      $Rev::                                                                          $ }
-{ Author:        $Author::                                                                       $ }
+{ Last modified: 15.07.2016                                                                      $ }
+{ Revision:      unofficial                                                                      $ }
+{ Author:        trichview                                                                       $ }
 {                                                                                                  }
 {**************************************************************************************************}
 
@@ -73,6 +85,7 @@ type
     FOnAfterExecute: TJclBorlandCommandLineToolEvent;
     FOnBeforeExecute: TJclBorlandCommandLineToolEvent;
     procedure OemTextHandler(const Text: string);
+    procedure SetOutput(const Value: string);
   protected
     procedure CheckOutputValid;
     function GetFileName: string;
@@ -87,6 +100,7 @@ type
     function GetOutput: string;
     function GetOutputCallback: TTextHandler;
     procedure AddPathOption(const Option, Path: string);
+    procedure CopyPathOption(const OldOption, NewOption: string);
     function Execute(const CommandLine: string): Boolean; virtual;
     procedure SetOutputCallback(const CallbackMethod: TTextHandler);
     property BinDirectory: string read FBinDirectory;
@@ -95,7 +109,7 @@ type
     property LongPathBug: Boolean read FLongPathBug;
     property Options: TStrings read GetOptions;
     property OutputCallback: TTextHandler write SetOutputCallback;
-    property Output: string read GetOutput;
+    property Output: string read GetOutput write SetOutput;
 
     property FileName: string read GetFileName;
     property OnAfterExecute: TJclBorlandCommandLineToolEvent read FOnAfterExecute write FOnAfterExecute;
@@ -136,7 +150,8 @@ type
     FSupportsPlatform: Boolean;
     FOnEnvironmentVariables: TJclStringsGetterFunction;
   protected
-    procedure AddProjectOptions(const ProjectFileName, DCPPath: string);
+    procedure AddProjectOptions(const ProjectFileName, DCPPath: string); virtual;
+    procedure AddExtraOptions; virtual;
     function Compile(const ProjectFileName: string): Boolean;
   public
     class function GetPlatform: string; virtual;
@@ -145,11 +160,11 @@ type
       const ADCPSearchPath, ALibrarySearchPath, ALibraryDebugSearchPath, ACppSearchPath: string);
     function GetExeName: string; override;
     function Execute(const CommandLine: string): Boolean; override;
-    function MakePackage(const PackageName, BPLPath, DCPPath: string;
-      ExtraOptions: string = ''; ADebug: Boolean = False): Boolean;
+    function MakePackage(const PackageName, BPLPath, DCPPath, LibPaths: string;
+      ExtraOptions: string; ADebug: Boolean = False): Boolean;
     function MakeProject(const ProjectName, OutputDir, DcpSearchPath: string;
       ExtraOptions: string = ''; ADebug: Boolean = False): Boolean;
-    procedure SetDefaultOptions(ADebug: Boolean); virtual;
+    procedure SetDefaultOptions(ADebug, AAddDefLibPaths: Boolean); virtual;
     function AddBDSProjOptions(const ProjectFileName: string; var ProjectOptions: TProjectOptions): Boolean;
     function AddDOFOptions(const ProjectFileName: string; var ProjectOptions: TProjectOptions): Boolean;
     function AddDProjOptions(const ProjectFileName: string; var ProjectOptions: TProjectOptions): Boolean;
@@ -174,6 +189,29 @@ type
     function GetExeName: string; override;
   end;
 
+  TJclCustomDCCOSX64 = class(TJclDCC32)
+  private
+    FDefaultPlatformSDK: String;
+  protected
+    procedure AddExtraOptions; override;
+    procedure AddProjectOptions(const ProjectFileName, DCPPath: string); override;
+  public
+    property DefaultPlatformSDK: String read FDefaultPlatformSDK write FDefaultPlatformSDK;
+  end;
+
+  TJclDCCOSX64 = class(TJclCustomDCCOSX64)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+  TJclDCCOSXArm64 = class(TJclCustomDCCOSX64)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+
   {$IFDEF MSWINDOWS}
   TJclDCCIL = class(TJclDCC32)
   private
@@ -184,7 +222,7 @@ type
     function GetExeName: string; override;
     function MakeProject(const ProjectName, OutputDir, ExtraOptions: string;
       ADebug: Boolean = False): Boolean; reintroduce;
-    procedure SetDefaultOptions(ADebug: Boolean); override;
+    procedure SetDefaultOptions(ADebug, AAddDefLibPaths: Boolean); override;
     property MaxCLRVersion: string read GetMaxCLRVersion;
   end;
   {$ENDIF MSWINDOWS}
@@ -206,6 +244,8 @@ const
   DCC32ExeName              = 'dcc32.exe';
   DCC64ExeName              = 'dcc64.exe';
   DCCOSX32ExeName           = 'dccosx.exe';
+  DCCOSX64ExeName           = 'dccosx64.exe';
+  DCCOSXArm64ExeName        = 'dccosxarm64.exe';
   DCCILExeName              = 'dccil.exe';
   Bpr2MakExeName            = 'bpr2mak.exe';
   MakeExeName               = 'make.exe';
@@ -214,6 +254,7 @@ const
   BinaryExtensionLibrary       = '.dll';
   BinaryExtensionExecutable    = '.exe';
   SourceExtensionDelphiPackage = '.dpk';
+  SourceExtensionRSBCBPackage = '.cbproj';
   SourceExtensionBCBPackage    = '.bpk';
   SourceExtensionDelphiProject = '.dpr';
   SourceExtensionBCBProject    = '.bpr';
@@ -225,6 +266,7 @@ const
 function BinaryFileName(const OutputPath, ProjectFileName: string): string;
 
 function IsDelphiPackage(const FileName: string): Boolean;
+function IsCBProjPackage(const FileName: string): Boolean;
 function IsDelphiProject(const FileName: string): Boolean;
 function IsBCBPackage(const FileName: string): Boolean;
 function IsBCBProject(const FileName: string): Boolean;
@@ -550,18 +592,33 @@ begin
   ProjectExtension := ExtractFileExt(ProjectFileName);
   if SameText(ProjectExtension, SourceExtensionDelphiPackage) then
   begin
-    GetDPKFileInfo(ProjectFileName, RunOnly, @LibSuffix);
+    if FileExists(ProjectFileName) then
+      GetDPKFileInfo(ProjectFileName, RunOnly, @LibSuffix)
+    else
+      LibSuffix := '';
+    Result := PathExtractFileNameNoExt(ProjectFileName) + LibSuffix + BinaryExtensionPackage;
+  end
+  else if SameText(ProjectExtension, SourceExtensionRSBCBPackage) then
+  begin
+    LibSuffix := '';
     Result := PathExtractFileNameNoExt(ProjectFileName) + LibSuffix + BinaryExtensionPackage;
   end
   else
   if SameText(ProjectExtension, SourceExtensionDelphiProject) then
   begin
-    GetDPRFileInfo(ProjectFileName, BinaryExtension, @LibSuffix);
+    if FileExists(ProjectFileName) then
+      GetDPRFileInfo(ProjectFileName, BinaryExtension, @LibSuffix)
+    else
+      LibSuffix := '';
     Result := PathExtractFileNameNoExt(ProjectFileName) + LibSuffix + BinaryExtension;
   end
   else
-  if SameText(ProjectExtension, SourceExtensionBCBPackage) then
-    GetBPKFileInfo(ProjectFileName, RunOnly, @Result)
+  if SameText(ProjectExtension, SourceExtensionBCBPackage) then begin
+    if FileExists(ProjectFileName) then
+      GetBPKFileInfo(ProjectFileName, RunOnly, @Result)
+    else
+      Result := PathExtractFileNameNoExt(ProjectFileName) + BinaryExtensionPackage;
+    end
   else
   if SameText(ProjectExtension, SourceExtensionBCBProject) then
     GetBPRFileInfo(ProjectFileName, Result)
@@ -574,6 +631,11 @@ end;
 function IsDelphiPackage(const FileName: string): Boolean;
 begin
   Result := SameText(ExtractFileExt(FileName), SourceExtensionDelphiPackage);
+end;
+
+function IsCBProjPackage(const FileName: string): Boolean;
+begin
+  Result := SameText(ExtractFileExt(FileName), SourceExtensionRSBCBPackage);
 end;
 
 function IsDelphiProject(const FileName: string): Boolean;
@@ -713,16 +775,47 @@ var
     end;
     {$ENDIF MSWINDOWS}
   end;
-
+var
+  S2, S3: String;
+  i: Integer;
 begin
   S := PathRemoveSeparator(Path);
   ConvertToShortPathNames(S);
   { TODO : If we were sure that options are always case-insensitive
            for Borland tools, we could use UpperCase(Option) below. }
-  S := Format('-%s"%s"', [Option, S]);
+  S2 := Format('-%s"%s"', [Option, S]);
   // avoid duplicate entries
-  if Options.IndexOf(S) = -1 then
-    Options.Add(S);
+  if Options.IndexOf(S2) = -1 then
+  begin
+    if Option = 'U' then
+      for i := 0 to Options.Count - 1 do
+        if (Copy(Options[i], 1, 3) = '-U"') and (Options[i][Length(Options[i])]='"') then
+        begin
+          S3 := Options[i];
+          Delete(S3, Length(S3), 1);
+          if S3[Length(S3)] <> ';' then
+            S3 := S3 + ';';
+          S3 := S3 + S + '"';
+          Options[i] := S3;
+          exit;
+        end;
+    Options.Add(S2);
+  end;
+end;
+
+procedure TJclBorlandCommandLineTool.CopyPathOption(const OldOption, NewOption: string);
+var
+  i: Integer;
+  S: String;
+begin
+  for i := Options.Count - 1 downto 0 do
+    if Copy(Options[i], 1, Length(OldOption)+2) = '-' + OldOption + '"' then
+    begin
+      S := Options[i];
+      Delete(S, 2, Length(OldOption));
+      Insert(NewOption, S, 2);
+      Options.Add(S);
+    end;
 end;
 
 procedure TJclBorlandCommandLineTool.CheckOutputValid;
@@ -768,6 +861,11 @@ begin
   Result := FOutput;
 end;
 
+procedure TJclBorlandCommandLineTool.SetOutput(const Value: string);
+begin
+  FOutput := Value;
+end;
+
 function TJclBorlandCommandLineTool.GetOutputCallback: TTextHandler;
 begin
   Result := FOutputCallback;
@@ -778,7 +876,7 @@ function TJclBorlandCommandLineTool.InternalExecute(
 var
   LaunchCommand: string;
 begin
-  LaunchCommand := Format('%s %s', [FileName, StrAnsiToOem(AnsiString(CommandLine))]);
+  LaunchCommand := Format('%s %s', [FileName, CommandLine]);
   if Assigned(FOutputCallback) then
   begin
     OemTextHandler(LaunchCommand);
@@ -992,6 +1090,11 @@ begin
   end;
 end;
 
+procedure TJclDCC32.AddExtraOptions;
+begin
+
+end;
+
 procedure TJclDCC32.AddProjectOptions(const ProjectFileName, DCPPath: string);
 var
   ProjectOptions: TProjectOptions;
@@ -1026,6 +1129,14 @@ begin
       Options.Add(Format('-LU"%s"', [ProjectOptions.DynamicPackages]));
     if ProjectOptions.Namespace <> '' then
     Options.Add('-ns' + ProjectOptions.Namespace);
+  end
+  else
+  begin
+    if SamePath(DCPPath, DCPSearchPath) then
+      ProjectOptions.SearchDcpPath := DCPPath
+    else
+      ProjectOptions.SearchDcpPath := StrEnsureSuffix(PathSep, DCPPath) + DCPSearchPath;
+    AddPathOption('U', ProjectOptions.SearchDcpPath);
   end;
 end;
 
@@ -1048,7 +1159,7 @@ begin
   FLibrarySearchPath := ALibrarySearchPath;
   FLibraryDebugSearchPath := ALibraryDebugSearchPath;
   FCppSearchPath := ACppSearchPath;
-  SetDefaultOptions(False); // in case $(DELPHI)\bin\dcc32.cfg (replace as appropriate) is invalid
+  SetDefaultOptions(False, True); // in case $(DELPHI)\bin\dcc32.cfg (replace as appropriate) is invalid
 end;
 
 function TJclDCC32.Execute(const CommandLine: string): Boolean;
@@ -1141,7 +1252,8 @@ begin
   Result := BDSPlatformWin32;
 end;
 
-function TJclDCC32.MakePackage(const PackageName, BPLPath, DCPPath: string; ExtraOptions: string = ''; ADebug: Boolean = False): Boolean;
+function TJclDCC32.MakePackage(const PackageName, BPLPath, DCPPath, LibPaths: string;
+  ExtraOptions: string; ADebug: Boolean = False): Boolean;
 var
   SaveDir: string;
   ConfigurationFileName, BackupFileName: string;
@@ -1155,12 +1267,15 @@ begin
       FileBackup(ConfigurationFileName, True);
 
     Options.Clear;
-    SetDefaultOptions(ADebug);
+    SetDefaultOptions(ADebug, LibPaths='');
     AddProjectOptions(PackageName, DCPPath);
     try
       AddPathOption('LN', DCPPath);
       AddPathOption('LE', BPLPath);
+      if LibPaths <> '' then
+        AddPathOption('U', LibPaths);
       Options.Add(ExtraOptions);
+      AddExtraOptions;
       Result := Compile(PackageName);
     finally
       // restore existing configuration file, if any
@@ -1188,7 +1303,7 @@ begin
       FileBackup(ConfigurationFileName, True);
 
     Options.Clear;
-    SetDefaultOptions(ADebug);
+    SetDefaultOptions(ADebug, True);
     AddProjectOptions(ProjectName, DcpSearchPath);
     try
       AddPathOption('E', OutputDir);
@@ -1205,17 +1320,21 @@ begin
   end;
 end;
 
-procedure TJclDCC32.SetDefaultOptions(ADebug: Boolean);
+procedure TJclDCC32.SetDefaultOptions(ADebug, AAddDefLibPaths: Boolean);
 begin
   Options.Clear;
   if SupportsNoConfig then
     Options.Add('--no-config');
-  if ADebug then
-    AddPathOption('U', LibraryDebugSearchPath);
-  AddPathOption('U', LibrarySearchPath);
+  if AAddDefLibPaths then
+  begin
+    if ADebug then
+      AddPathOption('U', LibraryDebugSearchPath);
+    AddPathOption('U', LibrarySearchPath);
+  end;
   if CppSearchPath <> '' then
   begin
-    AddPathOption('U', CppSearchPath);
+    if AAddDefLibPaths then
+      AddPathOption('U', CppSearchPath);
     Options.Add('-LUrtl');
   end;
 end;
@@ -1243,6 +1362,53 @@ function TJclDCCOSX32.GetExeName: string;
 begin
   Result := DCCOSX32ExeName;
 end;
+
+//=== { TJclCustomDCCOSX64 } =================================================
+
+procedure TJclCustomDCCOSX64.AddProjectOptions(const ProjectFileName, DCPPath: string);
+begin
+  inherited AddProjectOptions(ProjectFileName, DCPPath);
+  if DefaultPlatformSDK <> '' then
+  begin
+    AddPathOption('-syslibroot:', DefaultPlatformSDK);
+    AddPathOption('-frameworkpath:',
+      PathAddSeparator(DefaultPlatformSDK) + 'System\Library\Frameworks;' +
+      PathAddSeparator(DefaultPlatformSDK) + 'System\Library\PrivateFrameworks');
+  end;
+end;
+
+procedure TJclCustomDCCOSX64.AddExtraOptions;
+begin
+  inherited;
+  CopyPathOption('U', 'O');
+  CopyPathOption('U', 'R');
+end;
+
+//=== { TJclDCCOSX64 } =======================================================
+
+class function TJclDCCOSX64.GetPlatform: string;
+begin
+  Result := BDSPlatformOSX64;
+end;
+
+function TJclDCCOSX64.GetExeName: string;
+begin
+  Result := DCCOSX64ExeName;
+end;
+
+//=== { TJclDCCOSX64 } =======================================================
+
+class function TJclDCCOSXArm64.GetPlatform: string;
+begin
+  Result := BDSPlatformOSXArm64;
+end;
+
+function TJclDCCOSXArm64.GetExeName: string;
+begin
+  Result := DCCOSXArm64ExeName;
+end;
+
+
 
 {$IFDEF MSWINDOWS}
 //=== { TJclDCCIL } ==========================================================
@@ -1290,7 +1456,7 @@ begin
   SetCurrentDir(ExtractFilePath(ProjectName) + '.');
   try
     Options.Clear;
-    SetDefaultOptions(ADebug);
+    SetDefaultOptions(ADebug, True);
     AddProjectOptions(ProjectName, '');
     AddPathOption('E', OutputDir);
     Options.Add(ExtraOptions);
@@ -1300,12 +1466,15 @@ begin
   end;
 end;
 
-procedure TJclDCCIL.SetDefaultOptions(ADebug: Boolean);
+procedure TJclDCCIL.SetDefaultOptions(ADebug, AAddDefLibPaths: Boolean);
 begin
   Options.Clear;
-  if ADebug then
-    AddPathOption('U', LibraryDebugSearchPath);
-  AddPathOption('U', LibrarySearchPath);
+  if AAddDefLibPaths then
+  begin
+    if ADebug then
+      AddPathOption('U', LibraryDebugSearchPath);
+    AddPathOption('U', LibrarySearchPath);
+  end;
 end;
 
 {$ENDIF MSWINDOWS}
@@ -1333,4 +1502,3 @@ finalization
 {$ENDIF UNITVERSIONING}
 
 end.
-
