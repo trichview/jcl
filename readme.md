@@ -14,5 +14,5 @@ You also have to download the jedi.inc and kylix.inc files from the https://gith
 There are countless changes. To name a few:
 * CBPROJ installation
 * batch (fast) addition and removal of library paths
-* ununstall removes *all* package files
+* ununstall removes *all* package files (not leaving any garbage)
 
