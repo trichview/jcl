@@ -64,7 +64,7 @@
 { - Specifying library paths in parameters                                                         }
 { - adding BDSCatalogRepository to environment variables                                           }
 { - logging the process of building IDE list, if LOG_IDE is $defined                               }
-{ - OSX64, OSXArm64 platforms                                                                      }
+{ - OSX64, OSXArm64, Android, Android64 platforms                                                  }
 { - batch adding and removing paths                                                                }
 {**************************************************************************************************}
 {                                                                                                  }
@@ -96,7 +96,7 @@ uses
   {$ENDIF MSWINDOWS}
   Classes, SysUtils, IniFiles, Contnrs,
   {$ENDIF ~HAS_UNITSCOPE}
-  JclBase, JclSysUtils, JclCompilerUtils, JclSysInfo, JclMsBuild, ClipBrd;
+  JclBase, JclSysUtils, JclCompilerUtils, JclSysInfo, JclMsBuild, ClipBrd, ShellApi;
 
 // Various definitions
 type
@@ -160,6 +160,10 @@ const
   Personality64Bit        = '64 bit';
   PersonalityDelphi       = 'Delphi';
   PersonalityDelphiOSX    = 'Delphi for OSX';
+  PersonalityDelphiiOSSimulator = 'Delphi for iOSSimulator';
+  PersonalityDelphiiOSDevice    = 'Delphi for iOS';
+  PersonalityDelphiAndroid      = 'Delphi for Android';
+  PersonalityDelphiLinux        = 'Delphi for Linux';
   PersonalityDelphiDotNet = 'Delphi.net';
   PersonalityBCB          = 'C++Builder';
   PersonalityCSB          = 'C#Builder';
@@ -176,12 +180,18 @@ const
   BDSPlatformOSX32        = 'OSX32';
   BDSPlatformOSX64        = 'OSX64';
   BDSPlatformOSXArm64     = 'OSXARM64';
+  BDSPlatformiOSSimulator = 'iOSSimulator';
+  BDSPlatformiOSDevice32  = 'iOSDevice32';
+  BDSPlatformiOSDevice64  = 'iOSDevice64';
+  BDSPlatformAndroid32    = 'Android';
+  BDSPlatformAndroid64    = 'Android64';
+  BDSPlatformLinux64      = 'Linux64';
 
 // Installed versions information classes
 type
-  TJclBorPersonality = (bpDelphi32, bpDelphi64,
-    bpDelphiOSX32, bpDelphiOSX64, bpDelphiOSXArm64,
-    bpBCBuilder32, bpBCBuilder64,
+  TJclBorPersonality = (bpDelphi32, bpDelphi64, bpDelphiOSX32, bpDelphiOSX64, bpDelphiOSXArm64,
+    bpDelphiAndroid32, bpDelphiAndroid64, bpDelphiiOSDevice32, bpDelphiiOSDevice64, bpDelphiiOSSimulator,
+    bpDelphiLinux64, bpBCBuilder32, bpBCBuilder64,
     bpDelphiNet32, bpDelphiNet64, bpCSBuilder32, bpCSBuilder64,
     bpVisualBasic32, bpVisualBasic64, bpDesign, bpUnknown);
 
@@ -191,7 +201,8 @@ type
 
   TJclBorDesigners = set of TJClBorDesigner;
 
-  TJclBDSPlatform = (bpWin32, bpWin64, bpOSX32, bpOSX64, bpOSXArm64);
+  TJclBDSPlatform = (bpWin32, bpWin64, bpOSX32, bpOSX64, bpOSXArm64, bpAndroid32, bpAndroid64, bpiOSDevice32,
+    bpiOSDevice64, bpiOSSimulator, bpLinux64);
 
 const
   JclBorPersonalityDescription: array [TJclBorPersonality] of string =
@@ -201,6 +212,12 @@ const
     Personality32Bit + ' ' + PersonalityDelphiOSX,
     Personality64Bit + ' ' + PersonalityDelphiOSX,
     Personality64Bit + ' ARM ' + PersonalityDelphiOSX,
+    Personality32Bit + ' ' + PersonalityDelphiAndroid,
+    Personality64Bit + ' ' + PersonalityDelphiAndroid,
+    Personality32Bit + ' ' + PersonalityDelphiiOSDevice,
+    Personality64Bit + ' ' + PersonalityDelphiiOSDevice,
+    Personality32Bit + ' ' + PersonalityDelphiiOSSimulator,
+    Personality64Bit + ' ' + PersonalityDelphiLinux,
     Personality32Bit + ' ' + PersonalityBCB,
     Personality64Bit + ' ' + PersonalityBCB,
     Personality32Bit + ' ' + PersonalityDelphiDotNet,
@@ -341,8 +358,9 @@ type
     property Pages: TStrings read GetPages;
   end;
 
-  TCommandLineTool = (clAsm, clBcc32, clBcc64, clDcc32, clDcc64, clDccOSX32,
-    clDccOSX64, clDccOSXArm64, clDccIL, clMake, clProj2Mak);
+  TCommandLineTool = (clAsm, clBcc32, clBcc64, clDcc32, clDcc64, clDccOSX32, clDccOSX64, clDccOSXArm64, clDcciOSSimulator, 
+    clDcciOS32, clDcciOS64, clDccArm32, clDccArm64, clDccLinux64, clDccIL, clMake, clProj2Mak);
+
   TCommandLineTools = set of TCommandLineTool;
 
   TJclBorRADToolInstallationClass = class of TJclBorRADToolInstallation;
@@ -355,6 +373,7 @@ type
     FGlobals: TStringList;
     FRootDir: string;
     FBinFolderName: string;
+    FBCC: TJclBCC32;
     FBCC32: TJclBCC32;
     FDCC: TJclDCC32;
     FDCC32: TJclDCC32;
@@ -371,11 +390,11 @@ type
     {$ENDIF MSWINDOWS}
     FPalette: TJclBorRADToolPalette;
     FRepository: TJclBorRADToolRepository;
-    FVersionNumber: Integer;    // Delphi 2005: 3   -  Delphi 7: 7 - Delphi 2007: 11
-    FVersionNumberStr: string;
-    FIDEVersionNumber: Integer; // Delphi 2005: 3   -  Delphi 7: 7 - Delphi 2007: 11
+    FIDEVersionNumber: Integer;     // Delphi 7: 7, Delphi 2006: 4, Delphi Delphi 2007: 5, Delphi 2009: 6
     FIDEVersionNumberStr: string;
-    FPackageVersionNumber: Integer; // Delphi 2005: 3   -  Delphi 7: 7 - Delphi 2007: 10, Delphi 2009: 12, Delphi XE6: 20
+    FIDEPackageVersionNumber: Integer; // Delphi 7: 7, Delphi 2006: 10; Delphi 2007: 11, Delphi 2009: 12, Delphi XE6: 20
+    FPackageVersionNumber: Integer; // Delphi 7: 7, Dephi 2006: 10, Delphi 2007: 10 (non-breaking release), Delphi 2009: 12, Delphi XE6: 20
+    FDCCVersion: Single;
     FMapCreate: Boolean;
     {$IFDEF MSWINDOWS}
     FJdbgCreate: Boolean;
@@ -386,6 +405,7 @@ type
     FPersonalities: TJclBorPersonalities;
     FOutputCallback: TTextHandler;
     function GetSupportsLibSuffix: Boolean;
+    function GetBCC: TJclBCC32;
     function GetBCC32: TJclBCC32;
     function GetDCC: TJclDCC32;
     function GetDCC32: TJclDCC32;
@@ -403,7 +423,9 @@ type
     function GetRepository: TJclBorRADToolRepository;
     function GetUpdateNeeded: Boolean;
     function GetDefaultBDSCommonDir: string;
+    function GetIDEPackageVersionNumberStr: string;
     function GetPackageVersionNumberStr: string;
+    procedure SetBCC(const Value: TJclBCC32);
     procedure SetDCC(const Value: TJclDCC32);
     procedure FixEnvironmentVariables;
     procedure OverrideEnvironmentVariables;
@@ -475,6 +497,7 @@ type
 
     destructor Destroy; override;
     class function GetBDSPlatformStr(APlatform: TJclBDSPlatform): string;
+    class function GetBDSPlatformStrForRegistry(APlatform: TJclBDSPlatform): string;
     class procedure ExtractPaths(const Path: TJclBorRADToolPath; List: TStrings);
     class function GetLatestUpdatePackForVersion(Version: Integer): Integer; virtual;
     class function PackageSourceFileExtension: string; virtual;
@@ -541,6 +564,7 @@ type
     property LibDebugFolderName[APlatform: TJclBDSPlatform]: string read GetLibDebugFolderName;
     // Command line tools
     property CommandLineTools: TCommandLineTools read FCommandLineTools;
+    property BCC: TJclBCC32 read GetBCC write SetBCC;
     property BCC32: TJclBCC32 read GetBCC32;
     property DCC: TJclDCC32 read GetDCC write SetDCC;
     property DCC32: TJclDCC32 read GetDCC32;
@@ -590,8 +614,11 @@ type
     property VclIncludeDir[APlatform: TJclBDSPlatform]: string read GetVclIncludeDir;
     property IDEVersionNumber: Integer read FIDEVersionNumber;
     property IDEVersionNumberStr: string read FIDEVersionNumberStr;
-    property VersionNumber: Integer read FVersionNumber;
-    property VersionNumberStr: string read FVersionNumberStr;
+    property VersionNumber: Integer read FIDEVersionNumber;
+    property VersionNumberStr: string read FIDEVersionNumberStr;
+    property DCCVersion: Single read FDCCVersion;
+    property IDEPackageVersionNumber: Integer read FIDEPackageVersionNumber;
+    property IDEPackageVersionNumberStr: string read GetIDEPackageVersionNumberStr;
     property PackageVersionNumber: Integer read FPackageVersionNumber;
     property PackageVersionNumberStr: string read GetPackageVersionNumberStr;
     property Personalities: TJclBorPersonalities read FPersonalities;
@@ -677,6 +704,12 @@ type
     FDCCOSX32: TJclDCCOSX32;
     FDCCOSX64: TJclDCCOSX64;
     FDCCOSXArm64: TJclDCCOSXArm64;
+    FDCCiOSSimulator: TJclDCCiOSSimulator;
+    FDCCiOS32: TJclDCCiOS32;
+    FDCCiOS64: TJclDCCiOS64;
+    FDCCArm32: TJclDCCArm32;
+    FDCCArm64: TJclDCCArm64;
+    FDCCLinux64: TJclDCCLinux64;
     FBCC64: TJclBCC64;
     FPdbCreate: Boolean;
     procedure SetDualPackageInstallation(const Value: Boolean);
@@ -703,6 +736,12 @@ type
     function GetDCCOSX32: TJclDCCOSX32;
     function GetDCCOSX64: TJclDCCOSX64;
     function GetDCCOSXArm64: TJclDCCOSXArm64;
+    function GetDCCiOSSimulator: TJclDCCiOSSimulator;
+    function GetDCCiOS32: TJclDCCiOS32;
+    function GetDCCiOS64: TJclDCCiOS64;
+    function GetDCCArm32: TJclDCCArm32;
+    function GetDCCArm64: TJclDCCArm64;
+    function GetDCCLinux64: TJclDCCLinux64;
     function GetDCCIL: TJclDCCIL;
     function GetBCC64: TJclBCC64;
 
@@ -715,6 +754,8 @@ type
       const OptionName, Value: string; APlatform: TJclBDSPlatform);
     function ModifyAnyLibPath(Collection: TJclLibPathCollection;
       Add: Boolean): Boolean;
+    function GetBDSPlatformStr(APlatform: TJclBDSPlatform): string;
+    class procedure InterpretSetVariable(const Line: string; Variables: TStrings);
   protected
     function GetDCPOutputPath(APlatform: TJclBDSPlatform): string; override;
     function GetBPLOutputPath(APlatform: TJclBDSPlatform): string; override;
@@ -803,6 +844,12 @@ type
     property DCCOSX32: TJclDCCOSX32 read GetDCCOSX32;
     property DCCOSX64: TJclDCCOSX64 read GetDCCOSX64;
     property DCCOSXArm64: TJclDCCOSXArm64 read GetDCCOSXArm64;
+    property DCCiOSSimulator: TJclDCCiOSSimulator read GetDCCiOSSimulator;
+    property DCCiOS32: TJclDCCiOS32 read GetDCCiOS32;
+    property DCCiOS64: TJclDCCiOS64 read GetDCCiOS64;
+    property DCCArm32: TJclDCCArm32 read GetDCCArm32;
+    property DCCArm64: TJclDCCArm64 read GetDCCArm64;
+    property DCCLinux64: TJclDCCLinux64 read GetDCCLinux64;
     property BCC64: TJclBCC64 read GetBCC64;
     property DCCIL: TJclDCCIL read GetDCCIL;
     property MaxDelphiCLRVersion: string read GetMaxDelphiCLRVersion;
@@ -953,7 +1000,9 @@ type
   TBDSVersionInfo = record
     Name: PResStringRec;
     VersionStr: string;
-    Version: Integer;
+    DCCVersion: Single;
+    IDEPkgVersion: Integer;
+    PkgVersion: Integer;
     CoreIdeVersion: string;
     Supported: Boolean;
   end;
@@ -969,139 +1018,183 @@ const
 
 
   RADStudioDirName = 'RAD Studio';
-  RADStudio14UpDirName = 'Embarcardero\Studio';
+  RADStudio14UpDirName = 'Embarcadero\Studio';
 
   BDSVersions: array [1..22] of TBDSVersionInfo = (
     (
       Name: @RsCSharpName;
       VersionStr: '1.0';
-      Version: 1;
+      DCCVersion: 0.0;
+      IDEPkgVersion: 1;
+      PkgVersion: 1;
       CoreIdeVersion: '71';
       Supported: True),
     (
       Name: @RsDelphiName;
       VersionStr: '8';
-      Version: 8;
+      DCCVersion: 15.0; // Delphi 8 used the Delphi 7 compiler
+      IDEPkgVersion: 8;
+      PkgVersion: 7;
       CoreIdeVersion: '71';
       Supported: True),
     (
       Name: @RsDelphiName;
       VersionStr: '2005';
-      Version: 9;
+      DCCVersion: 17.0;
+      IDEPkgVersion: 9;
+      PkgVersion: 9;
       CoreIdeVersion: '90';
       Supported: True),
     (
       Name: @RsBDSName;
       VersionStr: '2006';
-      Version: 10;
+      DCCVersion: 18.0;
+      IDEPkgVersion: 10;
+      PkgVersion: 10;
       CoreIdeVersion: '100';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '2007';
-      Version: 11;
+      DCCVersion: 18.5;
+      IDEPkgVersion: 11; // Delphi 2007 IDE is 11 but runtime are 10
+      PkgVersion: 10;
       CoreIdeVersion: '100';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '2009';
-      Version: 12;
+      DCCVersion: 20.0; // Delphi.NET 2009 is 19.0
+      IDEPkgVersion: 12;
+      PkgVersion: 12;
       CoreIdeVersion: '120';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '2010';
-      Version: 14;
+      DCCVersion: 21.0;
+      IDEPkgVersion: 14;
+      PkgVersion: 14;
       CoreIdeVersion: '140';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: 'XE';
-      Version: 15;
+      DCCVersion: 22.0;
+      IDEPkgVersion: 15;
+      PkgVersion: 15;
       CoreIdeVersion: '150';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: 'XE2';
-      Version: 16;
+      DCCVersion: 23.0;
+      IDEPkgVersion: 16;
+      PkgVersion: 16;
       CoreIdeVersion: '160';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: 'XE3';
-      Version: 17;
+      DCCVersion: 24.0;
+      IDEPkgVersion: 17;
+      PkgVersion: 17;
       CoreIdeVersion: '170';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: 'XE4';
-      Version: 18;
+      DCCVersion: 25.0;
+      IDEPkgVersion: 18;
+      PkgVersion: 18;
       CoreIdeVersion: '180';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: 'XE5';
-      Version: 19;
+      DCCVersion: 26.0;
+      IDEPkgVersion: 19;
+      PkgVersion: 19;
       CoreIdeVersion: '190';
       Supported: True),
     (
-      Name: nil;
+      Name: nil; // "Appmethod"
       VersionStr: '';
-      Version: 0;
+      DCCVersion: 0.0;
+      IDEPkgVersion: 0;
+      PkgVersion: 0;
       CoreIdeVersion: '';
       Supported: False),
     (
       Name: @RsRSName;
       VersionStr: 'XE6';
-      Version: 20;
+      DCCVersion: 27.0;
+      IDEPkgVersion: 20;
+      PkgVersion: 20;
       CoreIdeVersion: '200';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: 'XE7';
-      Version: 21;
+      DCCVersion: 28.0;
+      IDEPkgVersion: 21;
+      PkgVersion: 21;
       CoreIdeVersion: '210';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: 'XE8';
-      Version: 22;
+      DCCVersion: 29.0;
+      IDEPkgVersion: 22;
+      PkgVersion: 22;
       CoreIdeVersion: '220';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '10 Seattle';
-      Version: 23;
+      DCCVersion: 30.0;
+      IDEPkgVersion: 23;
+      PkgVersion: 23;
       CoreIdeVersion: '230';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '10.1 Berlin';
-      Version: 24;
+      DCCVersion: 31.0;
+      IDEPkgVersion: 24;
+      PkgVersion: 24;
       CoreIdeVersion: '240';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '10.2 Tokyo';
-      Version: 25;
+      DCCVersion: 32.0;
+      IDEPkgVersion: 25;
+      PkgVersion: 25;
       CoreIdeVersion: '250';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '10.3 Rio';
-      Version: 26;
+      DCCVersion: 33.0;
+      IDEPkgVersion: 26;
+      PkgVersion: 26;
       CoreIdeVersion: '260';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '10.4 Sydney';
-      Version: 27;
+      DCCVersion: 34.0;
+      IDEPkgVersion: 27;
+      PkgVersion: 27;
       CoreIdeVersion: '270';
       Supported: True),
     (
       Name: @RsRSName;
       VersionStr: '11 Alexandria';
-      Version: 28;
+      DCCVersion: 35.0;
+      IDEPkgVersion: 28;
+      PkgVersion: 28;
       CoreIdeVersion: '280';
       Supported: True)
   );
@@ -1901,6 +1994,18 @@ begin
     Include(FCommandLineTools, clDccOSX64);
   if FileExists(BinFolderName + DCCOSXArm64ExeName) then
     Include(FCommandLineTools, clDccOSXArm64);
+  if FileExists(BinFolderName + DCCiOSSimulatorExeName) then
+    Include(FCommandLineTools, clDcciOSSimulator);
+  if FileExists(BinFolderName + DCCiOS32ExeName) then
+    Include(FCommandLineTools, clDcciOS32);
+  if FileExists(BinFolderName + DCCiOS64ExeName) then
+    Include(FCommandLineTools, clDcciOS64);
+  if FileExists(BinFolderName + DCCArm32ExeName) then
+    Include(FCommandLineTools, clDccArm32);
+  if FileExists(BinFolderName + DCCArm64ExeName) then
+    Include(FCommandLineTools, clDccArm64);
+  if FileExists(BinFolderName + DCCLinux64ExeName) then
+    Include(FCommandLineTools, clDccLinux64);
   {$IFDEF MSWINDOWS}
   if FileExists(BinFolderName + DCCILExeName) then
     Include(FCommandLineTools, clDccIL);
@@ -2028,10 +2133,20 @@ begin
       Result := BDSPlatformOSX64;
     bpOSXArm64:
       Result := BDSPlatformOSXArm64;
-
+    bpAndroid32:
+      Result := BDSPlatformAndroid32;
+    bpAndroid64:
+      Result := BDSPlatformAndroid64;
   else
     raise EJclBorRADException.CreateRes(@RsEPlatformNotValid);
   end;
+end;
+
+class function TJclBorRADToolInstallation.GetBDSPlatformStrForRegistry(APlatform: TJclBDSPlatform): string;
+begin
+  Result := GetBDSPlatformStr(APlatform);
+  if APlatform = bpAndroid32 then
+    Result := Result + '32';
 end;
 
 procedure TJclBorRADToolInstallation.CheckPlatform(APlatform: TJclBDSPlatform);
@@ -2040,8 +2155,13 @@ begin
      ((APlatform = bpWin64) and ([bpDelphi64,bpBCBuilder64] * Personalities = [])) or
      ((APlatform = bpOSX32) and ([bpDelphiOSX32] * Personalities = [])) or
      ((APlatform = bpOSX64) and ([bpDelphiOSX64] * Personalities = [])) or
-     ((APlatform = bpOSXArm64) and ([bpDelphiOSXArm64] * Personalities = []))
-     then
+     ((APlatform = bpOSXArm64) and ([bpDelphiOSXArm64] * Personalities = [])) or
+     ((APlatform = bpiOSSimulator) and ([bpDelphiiOSSimulator] * Personalities = [])) or
+     ((APlatform = bpiOSDevice32) and ([bpDelphiiOSDevice32] * Personalities = [])) or
+     ((APlatform = bpiOSDevice64) and ([bpDelphiiOSDevice64] * Personalities = [])) or
+     ((APlatform = bpAndroid32) and ([bpDelphiAndroid32] * Personalities = [])) or
+     ((APlatform = bpAndroid64) and ([bpDelphiAndroid64] * Personalities = [])) or
+     ((APlatform = bpLinux64) and ([bpDelphiLinux64] * Personalities = [])) then
     raise EJclBorRADException.CreateRes(@RsEPlatformNotValid);
 end;
 
@@ -2198,6 +2318,7 @@ begin
       PlatformStr := ' /p:platform=' + GetBDSPlatformStr(APlatform)
     else
       PlatformStr := '';
+    // ??? For Android 32-bit, should we use 'Android' or 'Android32' platform?
     Result := JclSysUtils.Execute(
       'msbuild.exe /t:'+Target+' /verbosity:m' +
       PlatformStr + ' ' + AnsiQuotedStr(PackageName, '"'), Output) = 0;
@@ -2328,6 +2449,14 @@ begin
   Result := FBpr2Mak;
 end;
 
+function TJclBorRADToolInstallation.GetBCC: TJclBCC32;
+begin
+  if Assigned(FBCC) then
+    Result := FBCC
+  else
+    Result := BCC32;
+end;
+
 function TJclBorRADToolInstallation.GetBCC32: TJclBCC32;
 begin
   if not Assigned(FBCC32) then
@@ -2369,7 +2498,7 @@ begin
   begin
     if not (clDcc32 in CommandLineTools) then
       raise EJclBorRadException.CreateResFmt(@RsENotFound, [Dcc32ExeName]);
-    FDCC32 := TJclDCC32.Create(BinFolderName, LongPathBug, CompilerSettingsFormat,
+    FDCC32 := TJclDCC32.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
                                SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpWin32], LibFolderName[bpWin32], LibDebugFolderName[bpWin32], ObjFolderName[bpWin32]);
     FDCC32.OnEnvironmentVariables := GetEnvironmentVariables;
   end;
@@ -2434,9 +2563,9 @@ begin
   Result := GetEnvironmentVariable(EnvVariableBDSCOMDIRValueName);
   if (RadToolKind = brBorlandDevStudio) and
      SHGetSpecialFolderPath(GetActiveWindow, CommonDocuments, CSIDL_COMMON_DOCUMENTS, False) then
-    if IDEVersionNumber >= 14 then
+    if IDEVersionNumber >= 14 then // XE6+
       Result := IncludeTrailingPathDelimiter(CommonDocuments) + RADStudio14UpDirName  + PathDelim + Format('%d.0', [IDEVersionNumber])
-    else if IDEVersionNumber >= 6 then
+    else if IDEVersionNumber >= 6 then // Delphi 2009+
       Result := IncludeTrailingPathDelimiter(CommonDocuments) + RADStudioDirName  + PathDelim + Format('%d.0', [IDEVersionNumber]);
   Result := Result + '\.';
 end;
@@ -2616,6 +2745,17 @@ begin
   CheckPlatform(APlatform);
   Result := LibFolderName[APlatform] + PathAddSeparator('obj');
   if not DirectoryExists(Result) then
+    Result := '';
+end;
+
+function TJclBorRADToolInstallation.GetIDEPackageVersionNumberStr: string;
+var
+  Value: Integer;
+begin
+  Value := IDEPackageVersionNumber;
+  if Value > 0 then
+    Result := IntToStr(Value) + '0'
+  else
     Result := '';
 end;
 
@@ -3017,29 +3157,23 @@ begin
   else
     FIDEVersionNumber := 0;
 
- // If this is Spacely, then consider the version is equal to 4 (BDS2006)
- // as it is a non breaking version (dcu wise)
-
- { ahuser: Delphi 2007 is a non breaking version in the case that you can use
-   BDS 2006 compiled units in Delphi 2007. But it completely breaks the BDS 2006
-   installation because if BDS 2006 uses the Delphi 2007 compile DCUs the
-   resulting executable is broken and will do strange things. So treat Delphi 2007
-   as version 11 what it actually is. }
- {if (FIDEVersionNumber = 5) and (RadToolKind = brBorlandDevStudio) then
-    FVersionNumber := 4
-  else}
-    FVersionNumber := FIDEVersionNumber;
-
-  FVersionNumberStr := FormatVersionNumber(VersionNumber);
-  FIDEVersionNumberStr := FormatVersionNumber(IDEVersionNumber);
+  FIDEVersionNumberStr := FormatVersionNumber(VersionNumber);
 
   if RadToolKind = brBorlandDevStudio then
   begin
     if IDEVersionNumber in [Low(BDSVersions)..High(BDSVersions)] then
-      FPackageVersionNumber := BDSVersions[IDEVersionNumber].Version;
+    begin
+      FPackageVersionNumber := BDSVersions[IDEVersionNumber].PkgVersion;
+      FIDEPackageVersionNumber := BDSVersions[IDEVersionNumber].IDEPkgVersion;
+      FDCCVersion := BDSVersions[IDEVersionNumber].DCCVersion;
+    end;
   end
   else
-    FPackageVersionNumber := VersionNumber;
+  begin
+    FIDEPackageVersionNumber := IDEVersionNumber;
+    FPackageVersionNumber := IDEVersionNumber;
+    FDCCVersion := 8 + IDEVersionNumber; // Delphi 1.0 = Compiler 8.0
+  end;
 
   FRootDir := PathRemoveSeparator(Globals.Values[RootDirValueName]);
   FBinFolderName := PathAddSeparator(RootDir) + BinDir;
@@ -3197,6 +3331,11 @@ begin
     PathItems.Free;
     RemoveItems.Free;
   end;
+end;
+
+procedure TJclBorRADToolInstallation.SetBCC(const Value: TJclBCC32);
+begin
+  FBCC := Value;
 end;
 
 procedure TJclBorRADToolInstallation.SetDCC(const Value: TJclDCC32);
@@ -3512,6 +3651,9 @@ begin
       OtherFileName := PathAddSeparator(DCPPath) + 'bpl' + BaseName + '.dylib';
       OutputFileDelete(OtherFileName);
 
+      OtherFileName := PathAddSeparator(BPLPath) + 'bpl' + BaseName + '.dylib';
+      OutputFileDelete(OtherFileName);
+
       OtherFileName := PathAddSeparator(DCPPath) + BaseName + '_nonshared.a';
       OutputFileDelete(OtherFileName);
 
@@ -3521,6 +3663,11 @@ begin
       OtherFileName := PathAddSeparator(DCPPath) + 'lib' + BaseName + '.a';
       OutputFileDelete(OtherFileName);
 
+    end;
+    if APlatform in [bpAndroid32, bpAndroid64] then
+    begin
+      OtherFileName := PathAddSeparator(DCPPath) + 'lib' + BaseName + '.a';
+      OutputFileDelete(OtherFileName);
     end;
   end;
 
@@ -3771,7 +3918,19 @@ begin
     Include(FPersonalities, bpDelphiOSX64);
   if clDccOSXArm64 in CommandLineTools then
     Include(FPersonalities, bpDelphiOSXArm64);
-  if (clBcc64 in CommandLineTools) and (bpBCBuilder32 in FPersonalities) then
+  if clDcciOSSimulator in CommandLineTools then
+    Include(FPersonalities, bpDelphiiOSSimulator);
+  if clDcciOS32 in CommandLineTools then
+    Include(FPersonalities, bpDelphiiOSDevice32);
+  if clDcciOS64 in CommandLineTools then
+    Include(FPersonalities, bpDelphiiOSDevice64);
+  if clDccArm32 in CommandLineTools then
+    Include(FPersonalities, bpDelphiAndroid32);
+  if clDccArm64 in CommandLineTools then
+    Include(FPersonalities, bpDelphiAndroid64);
+  if clDccLinux64 in CommandLineTools then
+    Include(FPersonalities, bpDelphiLinux64);
+  if clBcc64 in CommandLineTools then
     Include(FPersonalities, bpBCBuilder64);
 end;
 
@@ -3783,6 +3942,12 @@ begin
   FreeAndNil(FDCCOSX32);
   FreeAndNil(FDCCOSX64);
   FreeAndNil(FDCCOSXArm64);
+  FreeAndNil(FDCCiOSSimulator);
+  FreeAndNil(FDCCiOS32);
+  FreeAndNil(FDCCiOS64);
+  FreeAndNil(FDCCArm32);
+  FreeAndNil(FDCCArm64);
+  FreeAndNil(FDCCLinux64);
   FreeAndNil(FHelp2Manager);
   inherited Destroy;
 end;
@@ -4007,6 +4172,8 @@ begin
           raise EJclBorRADException.CreateRes(@RsEWin64PlatformNotValid);
       bpOSX32, bpOSX64, bpOSXArm64:
         raise EJclBorRADException.CreateRes(@RsEOSXPlatformNotValid);
+      bpAndroid32, bpAndroid64:
+        raise EJclBorRADException.CreateRes(@RsEAndroidPlatformNotValid);
     else
       raise EJclBorRADException.CreateRes(@RsEPlatformNotValid);
     end;
@@ -4080,6 +4247,37 @@ begin
     Result := inherited CompileDelphiProject(ProjectName, DcpSearchPath, OutputDir);
 end;
 
+function TJclBDSInstallation.GetBDSPlatformStr(APlatform: TJclBDSPlatform): string;
+begin
+  Result := '';
+  case APlatform of
+    bpWin32:
+      Result := BDSPlatformWin32;
+    bpWin64:
+      Result := BDSPlatformWin64;
+    bpOSX32:
+      Result := BDSPlatformOSX32;
+    bpOSX64:
+      Result := BDSPlatformOSX64;
+    bpOSXArm64:
+      Result := BDSPlatformOSXArm64;
+    bpAndroid32:
+      Result := BDSPlatformAndroid32;
+    bpAndroid64:
+      Result := BDSPlatformAndroid64;
+    bpiOSDevice32:
+      Result := BDSPlatformiOSDevice32;
+    bpiOSDevice64:
+      Result := BDSPlatformiOSDevice64;
+    bpiOSSimulator:
+      Result := BDSPlatformiOSSimulator;
+    bpLinux64:
+      Result := BDSPlatformLinux64;
+  else
+    raise EJclBorRADException.CreateRes(@RsEPlatformNotValid);
+  end;
+end;
+
 function TJclBDSInstallation.GetBPLOutputPath(APlatform: TJclBDSPlatform): string;
 
   function IsEmptyPath(const Path: String): Boolean;
@@ -4111,10 +4309,17 @@ begin
         Result := GetMsBuildEnvOption(MsBuildCBuilderBPLOutputPathNodeName, APlatform, False);
         if IsEmptyPath(Result) then
           Result := GetMsBuildEnvOption(MsBuildDelphiDLLOutputPathNodeName, APlatform, False);
-        if IsEmptyPath(Result) then begin
+        if IsEmptyPath(Result) then
+        begin
           Result := PathAddSeparator(FEnvironmentVariables.Values[EnvVariableBDSCOMDIRValueName])+'Bpl';
-          if APlatform=bpWin64 then
-            Result := Result+'\Win64';
+          case APlatform of
+            bpWin64: Result := Result+'\Win64';
+            bpOSX32: Result := Result+'\OSX32';
+            bpOSX64: Result := Result+'\OSX64';
+            bpOSXArm64: Result := Result+'\OSXARM64';
+            bpAndroid32: Result := Result+'\Android';
+            bpAndroid64: Result := Result+'\Android64';
+          end;
         end;
       end;
   end;
@@ -4129,10 +4334,12 @@ class function TJclBDSInstallation.GetCommonProjectsDirectory(const RootDir: str
   IDEVersionNumber: Integer): string;
 var
   Variables: TStrings;
+  {
   I: Integer;
   S, StartS: string;
   ps: Integer;
   LowerEnvVariableBDSCOMDIRValueName: string;
+  }
 begin
   if IDEVersionNumber >= 5 then
   begin
@@ -4140,6 +4347,7 @@ begin
 
     Variables := TStringList.Create;
     try
+{
       // Try to parse the rsvars.bat what is much faster than creating a cmd.exe process.
       try
         Variables.LoadFromFile(GetRADStudioVarsFileName(RootDir, IDEVersionNumber));
@@ -4172,6 +4380,7 @@ begin
       end;
 
       if Result = '' then
+}
       begin
         GetRADStudioVars(RootDir, IDEVersionNumber, Variables);
         Result := Variables.Values[EnvVariableBDSCOMDIRValueName];
@@ -4269,7 +4478,7 @@ begin
   begin
     if not (clDcc64 in CommandLineTools) then
       raise EJclBorRadException.CreateResFmt(@RsENotFound, [Dcc64ExeName]);
-    FDCC64 := TJclDCC64.Create(BinFolderName, LongPathBug, CompilerSettingsFormat,
+    FDCC64 := TJclDCC64.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
                                SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpWin64], LibFolderName[bpWin64],
                                LibDebugFolderName[bpWin64], ObjFolderName[bpWin64]);
   end;
@@ -4282,7 +4491,7 @@ begin
   begin
     if not (clDccOSX32 in CommandLineTools) then
       raise EJclBorRadException.CreateResFmt(@RsENotFound, [DccOSX32ExeName]);
-    FDCCOSX32 := TJclDCCOSX32.Create(BinFolderName, LongPathBug, CompilerSettingsFormat,
+    FDCCOSX32 := TJclDCCOSX32.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
                                      SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpOSX32], LibFolderName[bpOSX32],
                                      LibDebugFolderName[bpOSX32], ObjFolderName[bpOSX32]);
   end;
@@ -4297,7 +4506,7 @@ begin
   begin
     if not (clDccOSX64 in CommandLineTools) then
       raise EJclBorRadException.CreateResFmt(@RsENotFound, [DccOSX64ExeName]);
-    FDCCOSX64 := TJclDCCOSX64.Create(BinFolderName, LongPathBug, CompilerSettingsFormat,
+    FDCCOSX64 := TJclDCCOSX64.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
                                      SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpOSX64], LibFolderName[bpOSX64],
                                      LibDebugFolderName[bpOSX64], ObjFolderName[bpOSX64]);
     //SDKPath := EnvironmentVariables.Values[EnvVariableBDSPlatformSDKsDir];
@@ -4317,7 +4526,7 @@ begin
   begin
     if not (clDccOSXArm64 in CommandLineTools) then
       raise EJclBorRadException.CreateResFmt(@RsENotFound, [DccOSXArm64ExeName]);
-    FDCCOSXArm64 := TJclDCCOSXArm64.Create(BinFolderName, LongPathBug, CompilerSettingsFormat,
+    FDCCOSXArm64 := TJclDCCOSXArm64.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
                                      SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpOSXArm64], LibFolderName[bpOSXArm64],
                                      LibDebugFolderName[bpOSXArm64], ObjFolderName[bpOSXArm64]);
     // SDKPath := EnvironmentVariables.Values[EnvVariableBDSPlatformSDKsDir];
@@ -4327,6 +4536,84 @@ begin
       GetMsBuildEnvOption('DefaultPlatformSDK', bpOSXArm64, True);
   end;
   Result := FDCCOSXArm64;
+end;
+
+function TJclBDSInstallation.GetDCCiOSSimulator: TJclDCCiOSSimulator;
+begin
+  if not Assigned(FDCCiOSSimulator) then
+  begin
+    if not (clDcciOSSimulator in CommandLineTools) then
+      raise EJclBorRadException.CreateResFmt(@RsENotFound, [DCCiOSSimulatorExeName]);
+    FDCCiOSSimulator := TJclDCCiOSSimulator.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
+                                     SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpiOSSimulator], LibFolderName[bpiOSSimulator],
+                                     LibDebugFolderName[bpiOSSimulator], ObjFolderName[bpiOSSimulator]);
+  end;
+  Result := FDCCiOSSimulator;
+end;
+
+function TJclBDSInstallation.GetDCCiOS32: TJclDCCiOS32;
+begin
+  if not Assigned(FDCCiOS32) then
+  begin
+    if not (clDcciOS32 in CommandLineTools) then
+      raise EJclBorRadException.CreateResFmt(@RsENotFound, [DCCiOS32ExeName]);
+    FDCCiOS32 := TJclDCCiOS32.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
+                                     SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpiOSDevice32], LibFolderName[bpiOSDevice32],
+                                     LibDebugFolderName[bpiOSDevice32], ObjFolderName[bpiOSDevice32]);
+  end;
+  Result := FDCCiOS32;
+end;
+
+function TJclBDSInstallation.GetDCCiOS64: TJclDCCiOS64;
+begin
+  if not Assigned(FDCCiOS64) then
+  begin
+    if not (clDcciOS64 in CommandLineTools) then
+      raise EJclBorRadException.CreateResFmt(@RsENotFound, [DCCiOS64ExeName]);
+    FDCCiOS64 := TJclDCCiOS64.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
+                                     SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpiOSDevice64], LibFolderName[bpiOSDevice64],
+                                     LibDebugFolderName[bpiOSDevice64], ObjFolderName[bpiOSDevice64]);
+  end;
+  Result := FDCCiOS64;
+end;
+
+function TJclBDSInstallation.GetDCCArm32: TJclDCCArm32;
+begin
+  if not Assigned(FDCCArm32) then
+  begin
+    if not (clDccArm32 in CommandLineTools) then
+      raise EJclBorRadException.CreateResFmt(@RsENotFound, [DCCArm32ExeName]);
+    FDCCArm32 := TJclDCCArm32.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
+                                     SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpAndroid32], LibFolderName[bpAndroid32],
+                                     LibDebugFolderName[bpAndroid32], ObjFolderName[bpAndroid32]);
+  end;
+  Result := FDCCArm32;
+end;
+
+function TJclBDSInstallation.GetDCCArm64: TJclDCCArm64;
+begin
+  if not Assigned(FDCCArm64) then
+  begin
+    if not (clDccArm64 in CommandLineTools) then
+      raise EJclBorRadException.CreateResFmt(@RsENotFound, [DCCArm64ExeName]);
+    FDCCArm64 := TJclDCCArm64.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
+                                     SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpAndroid64], LibFolderName[bpAndroid64],
+                                     LibDebugFolderName[bpAndroid64], ObjFolderName[bpAndroid64]);
+  end;
+  Result := FDCCArm64;
+end;
+
+function TJclBDSInstallation.GetDCCLinux64: TJclDCCLinux64;
+begin
+  if not Assigned(FDCCLinux64) then
+  begin
+    if not (clDccLinux64 in CommandLineTools) then
+      raise EJclBorRadException.CreateResFmt(@RsENotFound, [DCCLinux64ExeName]);
+    FDCCLinux64 := TJclDCCLinux64.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
+                                     SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpLinux64], LibFolderName[bpLinux64],
+                                     LibDebugFolderName[bpLinux64], ObjFolderName[bpLinux64]);
+  end;
+  Result := FDCCLinux64;
 end;
 
 function TJclBDSInstallation.GetBCC64: TJclBCC64;
@@ -4348,7 +4635,7 @@ begin
   begin
     if not (clDccIL in CommandLineTools) then
       raise EJclBorRadException.CreateResFmt(@RsENotFound, [DccILExeName]);
-    FDCCIL := TJclDCCIL.Create(BinFolderName, LongPathBug, CompilerSettingsFormat,
+    FDCCIL := TJclDCCIL.Create(BinFolderName, LongPathBug, DCCVersion, CompilerSettingsFormat,
                                SupportsNoConfig, SupportsPlatform, DCPOutputPath[bpWin32], LibFolderName[bpWin32], LibDebugFolderName[bpWin32], ObjFolderName[bpWin32]);
   end;
   Result := FDCCIL;
@@ -4383,10 +4670,17 @@ begin
       // use EnvOptions.proj
       begin
         Result := GetMsBuildEnvOption(MsBuildDelphiDCPOutputNodeName, APlatform, False);
-        if IsEmptyPath(Result) then begin
+        if IsEmptyPath(Result) then
+        begin
           Result := PathAddSeparator(FEnvironmentVariables.Values[EnvVariableBDSCOMDIRValueName])+'Dcp';
-          if APlatform=bpWin64 then
-            Result := Result+'\Win64';
+          case APlatform of
+            bpWin64: Result := Result+'\Win64';
+            bpOSX32: Result := Result+'\OSX32';
+            bpOSX64: Result := Result+'\OSX64';
+            bpOSXArm64: Result := Result+'\OSXARM64';
+            bpAndroid32: Result := Result+'\Android';
+            bpAndroid64: Result := Result+'\Android64';
+          end;
         end;
       end;
   end;
@@ -4506,26 +4800,133 @@ begin
     Result := inherited GetLibFolderName(APlatform);
 end;
 
+class procedure TJclBDSInstallation.InterpretSetVariable(const Line: string; Variables: TStrings);
+
+  function SkipWhitespaces(P: PChar): PChar;
+  begin
+    Result := P;
+    while True do
+      case Result^ of
+        #1..#32: Inc(Result);
+      else
+        Break;
+      end;
+  end;
+
+  function SkipWhitespacesAndAtSign(P: PChar): PChar;
+  begin
+    Result := P;
+    while True do
+      case Result^ of
+        #1..#32, '@': Inc(Result);
+      else
+        Break;
+      end;
+  end;
+
+var
+  F, P: PChar;
+  VarName, VarValue: string;
+  S: string;
+begin
+  // parse "[@]set name=value"
+
+  F := SkipWhitespacesAndAtSign(PChar(Line));
+  P := F;
+  while P^ > #32 do
+    Inc(P);
+  if (P^ <> #0) and (StrLIComp('set', F, P - F) = 0) then
+  begin
+    // extract Variablen name
+    P := SkipWhitespaces(P);
+    F := P;
+    while (P^ <> #0) and (P^ <> '=') do
+      Inc(P);
+    if P^ <> #0 then // "set Variable" only outputs the variables so ignore it
+    begin
+      SetString(VarName, F, P - F); // the batch interpreter includes trailing whitespaces and so do we
+      if VarName <> '' then
+      begin
+        // extract variable value and resolve macros
+        VarValue := '';
+        F := P + 1;
+        P := F;
+        while P^ <> #0 do
+        begin
+          // fast forward
+          while True do
+          begin
+            case P^ of
+              #0, '%': Break;
+            end;
+            Inc(P);
+          end;
+
+          if P^ = #0 then
+            Break;
+
+          // append already parsed substring
+          if P - F > 0 then
+          begin
+            SetString(S, F, P - F);
+            VarValue := VarValue + S;
+          end;
+
+          // append resolved macro
+          Inc(P);
+          F := P;
+          while (P^ <> #0) and (P^ <> '%') do
+            Inc(P);
+          SetString(S, F, P - F);
+          VarValue := VarValue + Variables.Values[S];
+
+          if P^ <> #0 then
+            Inc(P);
+          F := P;
+        end;
+
+        // append remaining substring
+        if P - F > 0 then
+        begin
+          SetString(S, F, P - F);
+          VarValue := VarValue + S;
+        end;
+
+        Variables.Values[VarName] := VarValue;
+        if VarValue = '' then // empty VarValue removes the item from Variables but we must keep the overwrite for correctness
+          Variables.Add(VarName + '=');
+      end;
+    end;
+  end;
+end;
+
 class procedure TJclBDSInstallation.GetRADStudioVars(const RootDir: string; IDEVersionNumber: Integer; Variables: TStrings);
 var
-  RsVarsOutput, ComSpec, RsVarsError: string;
+  Lines: TStrings;
+  I: Integer;
 begin
   if IDEVersionNumber >= 5 then
   begin
-    RsVarsOutput := '';
-    RsVarsError := '';
-    if GetEnvironmentVar('COMSPEC', ComSpec) and (JclSysUtils.Execute(Format('%s /C " "%s" && set"',
-      [ComSpec, GetRADStudioVarsFileName(RootDir, IDEVersionNumber)]), RsVarsOutput, RsVarsError) = 0) then
-      Variables.Text := RsVarsOutput
-    else
-      raise EJclBorRADException.CreateResFmt(@RsERsVars, [RadToolName(IDEVersionNumber), IDEVersionNumber, RsVarsError]);
+    GetEnvironmentVars(Variables);
+
+    // Parse the rsvars.bat what is much faster than creating a cmd.exe process that could even fail
+    // to start leaving the user with an empty "RsVarsError" string. (Mantis #6282)
+    Lines := TStringList.Create;
+    try
+      Lines.LoadFromFile(GetRADStudioVarsFileName(RootDir, IDEVersionNumber));
+      // Interpret "[@]SET ...=..."
+      for I := 0 to Lines.Count - 1 do
+        InterpretSetVariable(Lines[I], Variables);
+    finally
+      Lines.Free;
+    end;
   end;
 end;
 
 class function TJclBDSInstallation.GetRADStudioVarsFileName(const RootDir: string; IDEVersionNumber: Integer): TFileName;
 begin
   if IDEVersionNumber >= 5 then
-    Result := Format('%s%sbin%srsvars.bat', [ExtractShortPathName(RootDir), DirDelimiter, DirDelimiter])
+    Result := Format('%s%sbin%srsvars.bat', [RootDir, DirDelimiter, DirDelimiter])
   else
     raise EJclBorRADException.CreateResFmt(@RsERsVars, [RadToolName(IDEVersionNumber), IDEVersionNumber, LoadResString(@RsMsBuildNotSupported)]);
 end;
@@ -5078,6 +5479,18 @@ begin
     DCCOSX64.OutputCallback := Value;
   if clDccOSXArm64 in CommandLineTools then
     DCCOSXArm64.OutputCallback := Value;
+  if clDcciOSSimulator in CommandLineTools then
+    DCCiOSSimulator.OutputCallback := Value;
+  if clDcciOS32 in CommandLineTools then
+    DCCiOS32.OutputCallback := Value;
+  if clDcciOS64 in CommandLineTools then
+    DCCiOS64.OutputCallback := Value;
+  if clDccArm32 in CommandLineTools then
+    DCCArm32.OutputCallback := Value;
+  if clDccArm64 in CommandLineTools then
+    DCCArm64.OutputCallback := Value;
+  if clDccLinux64 in CommandLineTools then
+    DCCLinux64.OutputCallback := Value;
   if clBcc64 in CommandLineTools then
     BCC64.OutputCallback := Value;
   if clDccIL in CommandLineTools then
@@ -5155,7 +5568,7 @@ begin
   if IDEVersionNumber >= 9 then
   begin
     // update registry
-    ConfigData.WriteString(LibraryKeyName + '\' + GetBDSPlatformStr(APlatform), BDSDebugDCUPathValueName, Value);
+    ConfigData.WriteString(LibraryKeyName + '\' + GetBDSPlatformStrForRegistry(APlatform), BDSDebugDCUPathValueName, Value);
     // update EnvOptions.dproj
     SetMsBuildEnvOption(MsBuildDelphiDebugDCUPathNodeName, Value, APlatform);
   end
@@ -5179,7 +5592,7 @@ begin
   if IDEVersionNumber >= 9 then
   begin
     // update registry
-    ConfigData.WriteString(LibraryKeyName + '\' + GetBDSPlatformStr(APlatform), LibraryBrowsingPathValueName, Value);
+    ConfigData.WriteString(LibraryKeyName + '\' + GetBDSPlatformStrForRegistry(APlatform), LibraryBrowsingPathValueName, Value);
     // update EnvOptions.dproj
     SetMsBuildEnvOption(MsBuildDelphiBrowsingPathNodeName, Value, APlatform);
   end
@@ -5203,7 +5616,7 @@ begin
   if IDEVersionNumber >= 9 then
   begin
     // update registry
-    ConfigData.WriteString(LibraryKeyName + '\' + GetBDSPlatformStr(APlatform), LibrarySearchPathValueName, Value);
+    ConfigData.WriteString(LibraryKeyName + '\' + GetBDSPlatformStrForRegistry(APlatform), LibrarySearchPathValueName, Value);
     // update EnvOptions.dproj
     SetMsBuildEnvOption(MsBuildDelphiLibraryPathNodeName, Value, APlatform);
   end
@@ -5313,8 +5726,7 @@ begin
           Break;
         end;
       brBorlandDevStudio:
-        if ((VersionNumber >= 14) and (Installations[I].IDEVersionNumber = (VersionNumber - 7))) or
-          ((VersionNumber >= 8) and (Installations[I].IDEVersionNumber = (VersionNumber - 6))) then
+        if Installations[I].IDEPackageVersionNumber = VersionNumber then
         begin
           Result := Installations[I];
           Break;
@@ -5542,7 +5954,7 @@ begin
   if Target.IDEVersionNumber >= 9 then
   begin
     // XE2 +
-    RegPath := LibraryKeyName + '\' + Target.GetBDSPlatformStr(APlatform);
+    RegPath := LibraryKeyName + '\' + Target.GetBDSPlatformStrForRegistry(APlatform);
     MsBuildNodeName := MsBuildDelphiLibraryPathNodeName;
   end
   else
@@ -5564,7 +5976,7 @@ begin
   if Target.IDEVersionNumber >= 9 then
   begin
     // XE2 +
-    RegPath := LibraryKeyName + '\' + Target.GetBDSPlatformStr(APlatform);
+    RegPath := LibraryKeyName + '\' + Target.GetBDSPlatformStrForRegistry(APlatform);
     MsBuildNodeName := MsBuildDelphiBrowsingPathNodeName;
   end
   else
@@ -5624,3 +6036,4 @@ finalization
 
 
 end.
+

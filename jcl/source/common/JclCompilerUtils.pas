@@ -146,16 +146,18 @@ type
     FLibrarySearchPath: string;
     FLibraryDebugSearchPath: string;
     FCppSearchPath: string;
+    FOnEnvironmentVariables: TJclStringsGetterFunction;
     FSupportsNoConfig: Boolean;
     FSupportsPlatform: Boolean;
-    FOnEnvironmentVariables: TJclStringsGetterFunction;
+    FDCCVersion: Single;
+
   protected
     procedure AddProjectOptions(const ProjectFileName, DCPPath: string); virtual;
     procedure AddExtraOptions; virtual;
     function Compile(const ProjectFileName: string): Boolean;
   public
     class function GetPlatform: string; virtual;
-    constructor Create(const ABinDirectory: string; ALongPathBug: Boolean;
+    constructor Create(const ABinDirectory: string; ALongPathBug: Boolean; ADCCVersion: Single;
       ACompilerSettingsFormat: TJclCompilerSettingsFormat; ASupportsNoConfig, ASupportsPlatform: Boolean;
       const ADCPSearchPath, ALibrarySearchPath, ALibraryDebugSearchPath, ACppSearchPath: string);
     function GetExeName: string; override;
@@ -175,6 +177,7 @@ type
     property OnEnvironmentVariables: TJclStringsGetterFunction read FOnEnvironmentVariables write FOnEnvironmentVariables;
     property SupportsNoConfig: Boolean read FSupportsNoConfig;
     property SupportsPlatform: Boolean read FSupportsPlatform;
+    property DCCVersion: Single read FDCCVersion;
   end;
 
   TJclDCC64 = class(TJclDCC32)
@@ -206,6 +209,42 @@ type
   end;
 
   TJclDCCOSXArm64 = class(TJclCustomDCCOSX64)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+  TJclDCCiOSSimulator = class(TJclDCC32)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+  TJclDCCiOS32 = class(TJclDCC32)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+  TJclDCCiOS64 = class(TJclDCC32)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+  TJclDCCArm32 = class(TJclDCC32)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+  TJclDCCArm64 = class(TJclDCC32)
+  public
+    class function GetPlatform: string; override;
+    function GetExeName: string; override;
+  end;
+
+  TJclDCCLinux64 = class(TJclDCC32)
   public
     class function GetPlatform: string; override;
     function GetExeName: string; override;
@@ -246,6 +285,12 @@ const
   DCCOSX32ExeName           = 'dccosx.exe';
   DCCOSX64ExeName           = 'dccosx64.exe';
   DCCOSXArm64ExeName        = 'dccosxarm64.exe';
+  DCCiOSSimulatorExeName    = 'dccios32.exe';
+  DCCiOS32ExeName           = 'dcciosarm.exe';
+  DCCiOS64ExeName           = 'dcciosarm64.exe';
+  DCCArm32ExeName           = 'dccaarm.exe';   //Android 32
+  DCCArm64ExeName           = 'dccaarm64.exe'; //Android 64
+  DCCLinux64ExeName         = 'dcclinux64.exe';
   DCCILExeName              = 'dccil.exe';
   Bpr2MakExeName            = 'bpr2mak.exe';
   MakeExeName               = 'make.exe';
@@ -1148,11 +1193,12 @@ begin
   Result := Execute(StrDoubleQuote(StrTrimQuotes(ProjectFileName)));
 end;
 
-constructor TJclDCC32.Create(const ABinDirectory: string; ALongPathBug: Boolean;
+constructor TJclDCC32.Create(const ABinDirectory: string; ALongPathBug: Boolean; ADCCVersion: Single;
   ACompilerSettingsFormat: TJclCompilerSettingsFormat; ASupportsNoConfig, ASupportsPlatform: Boolean;
   const ADCPSearchPath, ALibrarySearchPath, ALibraryDebugSearchPath, ACppSearchPath: string);
 begin
   inherited Create(ABinDirectory, ALongPathBug, ACompilerSettingsFormat);
+  FDCCVersion := ADCCVersion;
   FSupportsNoConfig := ASupportsNoConfig;
   FSupportsPlatform := ASupportsPlatform;
   FDCPSearchPath := ADCPSearchPath;
@@ -1188,12 +1234,22 @@ function TJclDCC32.Execute(const CommandLine: string): Boolean;
         'N':
           begin
             Result := True;
-            if (Length(S) >= 3) then
+            if Length(S) >= 3 then
             begin
               case Upcase(S[3]) of
+                'U', 'X': // -NU<dcupath> -NX<xmlpath>
+                  if DCCVersion >= 24.0 then // XE3+
+                    Len := 3
+                  else
+                    Len := 2;
                 '0'..'9',
                 'H', 'O', 'B':
                   Len := 3;
+                'S': // -NS<namespace>
+                  if DCCVersion >= 23.0 then // XE2+
+                    Len := 3
+                  else
+                    Len := 2;
               else
                 Len := 2;
               end;
@@ -1211,7 +1267,7 @@ begin
 
   FOutput := '';
   Arguments := '';
-  CurrentFolder := GetCurrentFolder;
+  CurrentFolder := PathGetShortName(GetCurrentFolder); // used if LongPathBug is True
 
   PathList := TStringList.Create;
   try
@@ -1396,7 +1452,7 @@ begin
   Result := DCCOSX64ExeName;
 end;
 
-//=== { TJclDCCOSX64 } =======================================================
+//=== { TJclDCCOSXArn64 } =======================================================
 
 class function TJclDCCOSXArm64.GetPlatform: string;
 begin
@@ -1408,6 +1464,77 @@ begin
   Result := DCCOSXArm64ExeName;
 end;
 
+//=== { TJclDCCiOSSimulator } =======================================================
+
+class function TJclDCCiOSSimulator.GetPlatform: string;
+begin
+  Result := BDSPlatformiOSSimulator;
+end;
+
+function TJclDCCiOSSimulator.GetExeName: string;
+begin
+  Result := DCCiOSSimulatorExeName;
+end;
+
+//=== { TJclDCCiOS32 } =======================================================
+
+class function TJclDCCiOS32.GetPlatform: string;
+begin
+  Result := BDSPlatformiOSDevice32;
+end;
+
+function TJclDCCiOS32.GetExeName: string;
+begin
+  Result := DCCiOS32ExeName;
+end;
+
+//=== { TJclDCCiOS64 } =======================================================
+
+class function TJclDCCiOS64.GetPlatform: string;
+begin
+  Result := BDSPlatformiOSDevice64;
+end;
+
+function TJclDCCiOS64.GetExeName: string;
+begin
+  Result := DCCiOS64ExeName;
+end;
+
+//=== { TJclDCCArm32 } =======================================================
+
+class function TJclDCCArm32.GetPlatform: string;
+begin
+  Result := BDSPlatformAndroid32;
+end;
+
+function TJclDCCArm32.GetExeName: string;
+begin
+  Result := DCCArm32ExeName;
+end;
+
+//=== { TJclDCCArm64 } =======================================================
+
+class function TJclDCCArm64.GetPlatform: string;
+begin
+  Result := BDSPlatformAndroid64;
+end;
+
+function TJclDCCArm64.GetExeName: string;
+begin
+  Result := DCCArm64ExeName;
+end;
+
+//=== { TJclDCCLinux64 } =======================================================
+
+class function TJclDCCLinux64.GetPlatform: string;
+begin
+  Result := BDSPlatformLinux64;
+end;
+
+function TJclDCCLinux64.GetExeName: string;
+begin
+  Result := DCCLinux64ExeName;
+end;
 
 
 {$IFDEF MSWINDOWS}
@@ -1502,3 +1629,4 @@ finalization
 {$ENDIF UNITVERSIONING}
 
 end.
+

@@ -2310,7 +2310,7 @@ begin
   FSignChars[False] := '-';
   FSignChars[True] := '+';
   FPaddingChar := ' ';
-  FMultiplier := 'Ð§';
+  FMultiplier := '×';
   FFractionalPartSeparator := JclFormatSettings.DecimalSeparator;
   FDigitBlockSeparator := JclFormatSettings.ThousandSeparator;
 end;

@@ -129,6 +129,7 @@ resourcestring
   RsEDualPackageNotSupported    = 'This installation of %s doesn''t support dual packages';
   RsEWin64PlatformNotValid      = 'This installation cannot generate binaries for Win64';
   RsEOSXPlatformNotValid        = 'This installation cannot generate binaries for OSX';
+  RsEAndroidPlatformNotValid    = 'This installation cannot generate binaries for Android';
   RsEPlatformNotValid           = 'This installation cannot generate binaries for an unknown platform';
   {$IFDEF MSWINDOWS}
   RsENoOpenHelp                 = 'open help not present in Borland Developer Studio';
