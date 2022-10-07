@@ -16,16 +16,21 @@
 { Portions created by Florent Ouchet are Copyright (C) of Florent Ouchet. All Rights Reserved.     }
 {                                                                                                  }
 { Contributor(s):                                                                                  }
+{   Sergey Tkachenko (trichview)                                                                   }
 {                                                                                                  }
 {**************************************************************************************************}
 {                                                                                                  }
 { Routines around MsBuild project files.                                                           }
 {                                                                                                  }
 {**************************************************************************************************}
+{ Changes by trichview:                                                                            }
+{ - MergeEnvironmentProperties now not only replaces existing variables, but also adds new vars    }
+{ - Allowing TJclSimpleXMLElemText items in ParseProperty
+{**************************************************************************************************}
 {                                                                                                  }
-{ Last modified: $Date::                                                                         $ }
-{ Revision:      $Rev::                                                                          $ }
-{ Author:        $Author::                                                                       $ }
+{ Last modified: 16.07.2016:                                                                     $ }
+{ Revision:      unofficial                                                                      $ }
+{ Author:        trichview                                                                       $ }
 {                                                                                                  }
 {**************************************************************************************************}
 
@@ -741,6 +746,7 @@ var
   PropName: string;
   SystemValue: string;
 begin
+{
   for I := 0 to FEnvironmentProperties.Count - 1 do
   begin
     PropName := FEnvironmentProperties.Names[I];
@@ -748,6 +754,23 @@ begin
     if SystemValue <> '' then
       FEnvironmentProperties.Values[PropName] := SystemValue;
   end;
+}
+ for I := 0 to SystemEnvironmentProperties.Count - 1 do
+ begin
+   PropName := SystemEnvironmentProperties.Names[I];
+   SystemValue := SystemEnvironmentProperties.ValueFromIndex[I];
+ {
+   if PropName = 'BDS' then
+     MessageBox(0, PChar(SystemValue), 'BDSREP', 0);
+ }
+   if SystemValue <> '' then
+     FEnvironmentProperties.Values[PropName] := SystemValue;
+ {
+   if PropName = 'BDS' then
+     MessageBox(0, PChar(FEnvironmentProperties.Values[PropName]), 'BDSREP2', 0);
+ }
+ end;
+
 end;
 
 procedure TJclMsBuildProperties.Put(Index: Integer; const S: string);
@@ -1362,6 +1385,10 @@ end;
 function TJclMsBuildParser.GetPropertyValue(const Name: string): string;
 begin
   Result := Properties.Values[Name];
+  {
+  if Name = 'BDS' then
+    MessageBox(0, PChar(Result), 'BDS', 0);
+  }
 end;
 
 function TJclMsBuildParser.GetTarget(Index: Integer): TJclMsBuildTarget;
@@ -1512,10 +1539,10 @@ begin
   Properties.ReservedProperties.Values['MSBuildProjectDirectoryNoRoot'] := Path;
 
   // MSBuildThisFile
-  Properties.ReservedProperties.Values['MSBuildProjectDirectoryNoRoot'] := CurrentFileName;
+  Properties.ReservedProperties.Values['MSBuildThisFile'] := CurrentFileName;
 
   // MSBuildThisFileDirectory
-  Properties.ReservedProperties.Values['MSBuildProjectDirectoryNoRoot'] := PathRemoveSeparator(ExtractFilePath(CurrentFileName));
+  Properties.ReservedProperties.Values['MSBuildThisFileDirectory'] := PathRemoveSeparator(ExtractFilePath(CurrentFileName));
 end;
 
 procedure TJclMsBuildParser.Parse;
@@ -1777,8 +1804,17 @@ begin
     // skip closing quote
     Inc(Position);
   end
-  else
+  else if (Condition[Position] = '$') and (Position + 1 < Len) and
+    (Condition[Position + 1] = '(') then
   begin
+    while (Position <= Len) and (Condition[Position] <> ')') do
+      Inc(Position);
+    if Position > Len then
+      raise EJclMsBuildError.CreateResFmt(@RsEMissingParenthesis, [Condition]);
+    inc(Position);
+    EndPos := Position;
+  end
+  else begin
     // alphanumeric strings do not need to be quoted
     while (Position <= Len) and CharIsValidIdentifierLetter(Condition[Position]) do
       Inc(Position);
@@ -2376,7 +2412,7 @@ begin
   for Index := 0 to XmlElem.ItemCount - 1 do
   begin
     SubElem := XmlElem.Items.Item[Index];
-    if not (SubElem is TJclSimpleXMLElemComment) then
+    if not ((SubElem is TJclSimpleXMLElemComment) or (SubElem is TJclSimpleXMLElemText)) then
       raise EJclMsBuildError.CreateResFmt(@RsEUnknownElement, [SubElem.Name]);
   end;
 
