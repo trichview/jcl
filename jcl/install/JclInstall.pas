@@ -807,12 +807,30 @@ function TJclInstallation.GetTargetSupportsCBuilder: Boolean;
 begin
   Result := ((bpBCBuilder32 in Target.Personalities) and (TargetPlatform = bpWin32)) or
             ((bpBCBuilder64 in Target.Personalities) and (TargetPlatform = bpWin64));
+  if Result then
+  begin
+    // If we don't have a command line C++ compiler we can't compile
+    // (fake BCB Personality from the Web Installer)
+    if TargetPlatform = bpWin32 then
+      Result := clBcc32 in Target.CommandLineTools
+    else if TargetPlatform = bpWin64 then
+      Result := clBcc64 in Target.CommandLineTools;
+  end;
 end;
 
 function TJclInstallation.GetTargetSupportsDelphi: Boolean;
 begin
   Result := ((bpDelphi32 in Target.Personalities) and (TargetPlatform = bpWin32)) or
             ((bpDelphi64 in Target.Personalities) and (TargetPlatform = bpWin64));
+  if Result then
+  begin
+    // If we don't have a command line C++ compiler we can't compile
+    // (fake Delphi Personality from the Web Installer)
+    if TargetPlatform = bpWin32 then
+      Result := clDcc32 in Target.CommandLineTools
+    else if TargetPlatform = bpWin64 then
+      Result := clDcc64 in Target.CommandLineTools;
+  end;
 end;
 
 procedure TJclInstallation.MarkOptionBegin(Id: Integer);
@@ -882,7 +900,7 @@ procedure TJclInstallation.Init;
     AddOption(joJCLDefDropObsoleteCode, [goChecked], Parent);
     if (Target.RadToolKind <> brBorlandDevStudio) or (Target.IDEVersionNumber <> 3) then
       // Delphi 2005 has a compiler internal failure when compiling the JCL with UNITVERSIONING enabled
-      AddOption(joJCLDefUnitVersioning, [goChecked], Parent);
+      AddOption(joJCLDefUnitVersioning, [{goChecked}], Parent); // UnitVersioning isn't threadsafe and causes crashes in COM-Servers
 
     AddOption(joJCLDefMath, [goChecked], Parent);
     AddOption(joJCLDefMathPrecSingle, [goRadioButton], joJCLDefMath);
@@ -1686,6 +1704,17 @@ var
   var
     I: Integer;
   begin
+    // As people may only buy Delphi (without C++ Builder), we must make sure that bcc(32-64) is available before accessing the property
+    if FTargetPlatform = bpWin64 then
+    begin
+      if clBcc64 in Target.CommandLineTools then 
+        Target.BCC := (Target as TJclBDSInstallation).BCC64
+    end
+    else if clBcc32 in Target.CommandLineTools then 
+    begin
+      Target.BCC := Target.BCC32;
+    end;
+
     Result := True;
     if OptionChecked[joJCLMake] then
     begin
@@ -3265,7 +3294,7 @@ function TJclDistribution.CreateInstall(Target: TJclBorRADToolInstallation): Boo
         Result := Target.VersionNumber in [6];
       brBorlandDevStudio :
         Result := ((Target.VersionNumber in [1, 2]) and (bpDelphi32 in Target.Personalities))
-          or (Target.VersionNumber in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]);
+          or (Target.VersionNumber in [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
       else
         Result := False;
     end;
