@@ -25,10 +25,13 @@
 {**************************************************************************************************}
 { Changes by trichview:                                                                            }
 { - MergeEnvironmentProperties now not only replaces existing variables, but also adds new vars    }
-{ - Allowing TJclSimpleXMLElemText items in ParseProperty
+{ - Allowing TJclSimpleXMLElemText items in ParseProperty                                          }
+{ - Changes in TJclMsBuildParser to specify the default property group for writing properties      }
+{   (instead of the first found property group)                                                    }
+{ - Changes in TJclMsBuildParser to allow parsing multiple times (with different platforms)        }
 {**************************************************************************************************}
 {                                                                                                  }
-{ Last modified: 16.07.2016:                                                                     $ }
+{ Last modified: 20.02.2025:                                                                     $ }
 { Revision:      unofficial                                                                      $ }
 { Author:        trichview                                                                       $ }
 {                                                                                                  }
@@ -194,6 +197,7 @@ type
 
   TJclMsBuildParser = class;
 
+
   // TStrings wrapper for all the MsBuild properties, values are searched
   // in the following ordered property classes:
   //  - reserved properties defined by MsBuild,
@@ -225,9 +229,12 @@ type
     constructor Create(AParser: TJclMsBuildParser);
     destructor Destroy; override;
 
+    procedure SetValueEx(const Name, Value: string);
+
     property Parser: TJclMsBuildParser read FParser;
 
     procedure Clear; override;
+    procedure ClearWithXml;
 
     procedure Delete(Index: Integer); override;
     function IndexOf(const S: string): Integer; override;
@@ -268,7 +275,7 @@ type
     FDotNetVersion: string;
     FIgnoreFunctionProperties: Boolean;
     FWorkingDirectory: string;
-    FFirstPropertyGroup: TJclSimpleXMLElem;
+    FDefaultPropertyGroup: TJclSimpleXMLElem;
     FProjectExtensions: TJclSimpleXMLElem;
     FOnImport: TJclMsBuildImportEvent;
     FOnToolsVersion: TJclMsBuildToolsVersionEvent;
@@ -294,15 +301,15 @@ type
     procedure ParseOutput(XmlElem: TJclSimpleXMLElem; Task: TJclMsBuildTask);
     procedure ParseParameter(XmlElem: TJclSimpleXMLElem; UsingTask: TJclMsBuildUsingTask);
     procedure ParseParameterGroup(XmlElem: TJclSimpleXMLElem; UsingTask: TJclMsBuildUsingTask);
-    procedure ParseProject(XmlElem: TJclSimpleXmlElem);
+    procedure ParseProject(XmlElem: TJclSimpleXmlElem; const DefaultPropGroupCondition: String);
     procedure ParseProperty(XmlElem: TJclSimpleXmlElem);
-    procedure ParsePropertyGroup(XmlElem: TJclSimpleXmlElem);
+    procedure ParsePropertyGroup(XmlElem: TJclSimpleXmlElem; const DefaultPropGroupCondition: String);
     procedure ParseTarget(XmlElem: TJclSimpleXmlElem);
     procedure ParseTask(XmlElem: TJclSimpleXMLElem; Target: TJclMsBuildTarget);
     procedure ParseTaskBody(XmlElem: TJclSimpleXMLElem; UsingTask: TJclMsBuildUsingTask);
     procedure ParseUsingTask(XmlElem: TJclSimpleXmlElem);
     function ParseWhen(XmlElem: TJclSimpleXmlElem; Skip: Boolean): Boolean;
-    procedure ParseXml(AXml: TJclSimpleXML);
+    procedure ParseXml(AXml: TJclSimpleXML; const DefaultPropGroupCondition: String);
   protected
     function GetPropertyValue(const Name: string): string; virtual;
     procedure SetPropertyValue(const Name, Value: string); virtual;
@@ -332,7 +339,7 @@ type
     procedure ClearItemDefinitions;
     procedure ClearTargets;
 
-    procedure Parse;
+    procedure Parse(const DefaultPropGroupCondition: String);
     procedure Save;
 
     procedure FindItemIncludes(const ItemName: string; List: TStrings);
@@ -397,6 +404,9 @@ uses
   JclShell,
   JclStrings,
   JclDevToolsResources;
+
+const
+  NoConditionStr = '-';
 
 //=== { TJclMsBuildItem } ====================================================
 
@@ -516,6 +526,7 @@ begin
   Result := FTasks.Count;
 end;
 
+
 //=== { TJclMsBuildProperties } ==============================================
 
 constructor TJclMsBuildProperties.Create(AParser: TJclMsBuildParser);
@@ -544,6 +555,36 @@ begin
   EnvironmentProperties.Clear;
   GlobalProperties.Clear;
 end;
+
+// Set even empty value
+procedure TJclMsBuildProperties.SetValueEx(const Name, Value: string);
+var
+  I: Integer;
+begin
+  I := IndexOfName(Name);
+  if I < 0 then
+    I := Add('');
+  Put(I, Name + NameValueSeparator + Value);
+end;
+
+procedure TJclMsBuildProperties.ClearWithXml;
+
+  procedure DoClear(Props: TStrings);
+  var
+    I: Integer;
+  begin
+    for I := Props.Count - 1 downto 0 do
+      if Props.Objects[I] <> nil then
+        Props.Delete(I);
+  end;
+
+begin
+  DoClear(ReservedProperties);
+  DoClear(CustomProperties);
+  DoClear(EnvironmentProperties);
+  DoClear(GlobalProperties);
+end;
+
 
 procedure TJclMsBuildProperties.Delete(Index: Integer);
 begin
@@ -857,8 +898,13 @@ begin
   if Assigned(XmlElem) then
     XmlElem.Value := Value
   else
-  if Assigned(Parser.FFirstPropertyGroup) then
-    Parser.FFirstPropertyGroup.Items.Add(Name, Value)
+  if Assigned(Parser.FDefaultPropertyGroup) then
+  begin
+    XmlElem := Parser.FDefaultPropertyGroup.Items.Add(Name, Value);
+    SetValueEx(Name, Value);
+    Index := IndexOfName(XmlElem.Name);
+    Objects[Index] := XmlElem;
+  end
   else
     raise EJclMsBuildError.CreateResFmt(@RsELocateXmlElem, [Name]);
 end;
@@ -1545,12 +1591,13 @@ begin
   Properties.ReservedProperties.Values['MSBuildThisFileDirectory'] := PathRemoveSeparator(ExtractFilePath(CurrentFileName));
 end;
 
-procedure TJclMsBuildParser.Parse;
+procedure TJclMsBuildParser.Parse(const DefaultPropGroupCondition: String);
 begin
-  FFirstPropertyGroup := nil;
+  FDefaultPropertyGroup := nil;
   FProjectExtensions := nil;
   FCurrentFileName := FProjectFileName;
-  ParseXml(FXml);
+  FProperties.ClearWithXml;
+  ParseXml(FXml, DefaultPropGroupCondition);
 end;
 
 procedure TJclMsBuildParser.ParseChoose(XmlElem: TJclSimpleXmlElem);
@@ -1932,7 +1979,7 @@ begin
         FCurrentFileName := Project;
         FProjectExtensions := nil;
         InitReservedProperties;
-        ParseXml(SubXml);
+        ParseXml(SubXml, NoConditionStr);
       finally
         FCurrentFileName := OldCurrentFileName;
         FProjectExtensions := OldProjectExtensions;
@@ -2188,7 +2235,7 @@ begin
     if SubElem.Name = 'PropertyGroup' then
     begin
       if Result then
-        ParsePropertyGroup(SubElem);
+        ParsePropertyGroup(SubElem, NoConditionStr);
     end
     else
     if not (SubElem is TJclSimpleXMLElemComment) then
@@ -2311,7 +2358,8 @@ begin
   end;
 end;
 
-procedure TJclMsBuildParser.ParseProject(XmlElem: TJclSimpleXmlElem);
+procedure TJclMsBuildParser.ParseProject(XmlElem: TJclSimpleXmlElem;
+  const DefaultPropGroupCondition: String);
 var
   Index: Integer;
   Prop: TJclSimpleXMLProp;
@@ -2374,11 +2422,7 @@ begin
     end
     else
     if SubElem.Name = 'PropertyGroup' then
-    begin
-      if (CurrentFileName = ProjectFileName) and not Assigned(FFirstPropertyGroup) then
-        FFirstPropertyGroup := SubElem;
-      ParsePropertyGroup(SubElem)
-    end
+      ParsePropertyGroup(SubElem, DefaultPropGroupCondition)
     else
     if SubElem.Name = 'Target' then
       ParseTarget(SubElem)
@@ -2388,6 +2432,13 @@ begin
     else
     if not (SubElem is TJclSimpleXMLElemComment) then
       raise EJclMsBuildError.CreateResFmt(@RsEUnknownElement, [SubElem.Name]);
+  end;
+  if (FDefaultPropertyGroup = nil) and (DefaultPropGroupCondition <> NoConditionStr) and
+    (CurrentFileName = ProjectFileName) then
+  begin
+    FDefaultPropertyGroup := XmlElem.Items.Add('PropertyGroup');
+    if DefaultPropGroupCondition <> '' then
+      FDefaultPropertyGroup.Properties.Add('Condition', DefaultPropGroupCondition);
   end;
 end;
 
@@ -2429,23 +2480,36 @@ begin
   end;
 end;
 
-procedure TJclMsBuildParser.ParsePropertyGroup(XmlElem: TJclSimpleXmlElem);
+procedure TJclMsBuildParser.ParsePropertyGroup(XmlElem: TJclSimpleXmlElem;
+  const DefaultPropGroupCondition: String);
 var
   Index: Integer;
   Prop: TJclSimpleXmlProp;
   SubElem: TJclSimpleXmlElem;
-  Condition: Boolean;
+  Condition, HasCondition: Boolean;
 begin
   Condition := True;
 
+  HasCondition := False;
   for Index := 0 to XmlElem.PropertyCount - 1 do
   begin
     Prop := XmlElem.Properties.Item[Index];
     if Prop.Name = 'Condition' then
-      Condition := ParseCondition(Prop.Value)
+    begin
+      HasCondition := True;
+      Condition := ParseCondition(Prop.Value);
+      if Condition and (FDefaultPropertyGroup = nil) and
+        (CurrentFileName = ProjectFileName) and
+        (AnsiLowerCase(DefaultPropGroupCondition) = AnsiLowerCase(Prop.Value)) then
+        FDefaultPropertyGroup := XmlElem;
+    end
     else
       raise EJclMsBuildError.CreateResFmt(@RsEUnknownProperty, [Prop.Name]);
   end;
+  if not HasCondition and (FDefaultPropertyGroup = nil) and
+    (CurrentFileName = ProjectFileName) and
+    (DefaultPropGroupCondition = '') then
+    FDefaultPropertyGroup := XmlElem;
 
   if Condition then
     for Index := 0 to XmlElem.ItemCount - 1 do
@@ -2712,7 +2776,7 @@ begin
     if SubElem.Name = 'PropertyGroup' then
     begin
       if Result then
-        ParsePropertyGroup(SubElem);
+        ParsePropertyGroup(SubElem, NoConditionStr);
     end
     else
     if not (SubElem is TJclSimpleXMLElemComment) then
@@ -2720,11 +2784,12 @@ begin
   end;
 end;
 
-procedure TJclMsBuildParser.ParseXml(AXml: TJclSimpleXML);
+procedure TJclMsBuildParser.ParseXml(AXml: TJclSimpleXML;
+  const DefaultPropGroupCondition: String);
 begin
   if AXml.Root.Name <> 'Project' then
     raise EJclMsBuildError.CreateResFmt(@RsENoProjectElem, [AXml.Root.Name]);
-  ParseProject(AXml.Root);
+  ParseProject(AXml.Root, DefaultPropGroupCondition);
 end;
 
 procedure TJclMsBuildParser.Save;
@@ -2732,9 +2797,10 @@ begin
   Xml.SaveToFile(ProjectFileName);
 end;
 
+
 procedure TJclMsBuildParser.SetPropertyValue(const Name, Value: string);
 begin
-  Properties.Values[Name] := Value;
+  Properties.SetValueEx(Name, Value);
 end;
 
 procedure TJclMsBuildParser.XMLDecodeValue(Sender: TObject; var Value: string);
