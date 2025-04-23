@@ -131,6 +131,8 @@ resourcestring
   RsEOSXPlatformNotValid        = 'This installation cannot generate binaries for OSX';
   RsEAndroidPlatformNotValid    = 'This installation cannot generate binaries for Android';
   RsEPlatformNotValid           = 'This installation cannot generate binaries for an unknown platform';
+  RsEBDSPlatformNotValid        = 'Incorrect BDS platform';
+  RsEBDSWin64PlatformNotValid   = 'This installation does not contain 64-bit BDS';
   {$IFDEF MSWINDOWS}
   RsENoOpenHelp                 = 'open help not present in Borland Developer Studio';
   {$ENDIF MSWINDOWS}

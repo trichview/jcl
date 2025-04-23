@@ -309,6 +309,7 @@ const
   DCCILExeName              = 'dccil.exe';
   Bpr2MakExeName            = 'bpr2mak.exe';
   MakeExeName               = 'make.exe';
+  BDS64ExeName              = 'bds.exe';
 
   BinaryExtensionPackage       = '.bpl';
   BinaryExtensionLibrary       = '.dll';
